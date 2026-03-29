@@ -76,11 +76,14 @@ func TestBuildViewModelLeaderboardAndSpecialFoods(t *testing.T) {
 	if vm.Leaderboard.Entries[0].Kills == 0 {
 		t.Fatal("expected leaderboard kills column data")
 	}
+	if vm.Leaderboard.Entries[0].PingMS == 0 {
+		t.Fatal("expected leaderboard ping column data")
+	}
 
 	foundSpecial := false
 	for _, row := range vm.Board.Grid {
 		for _, cell := range row {
-			if cell.Char == ui.CharImmortalFruit || cell.Char == ui.CharMegaFruit || cell.Char == ui.CharRemnantFood {
+			if cell.Char == ui.CharImmortalFruit || cell.Char == ui.CharMegaFruit || cell.Char == ui.CharRainbowFruit || cell.Char == ui.CharRemnantFood {
 				foundSpecial = true
 			}
 		}
@@ -92,6 +95,11 @@ func TestBuildViewModelLeaderboardAndSpecialFoods(t *testing.T) {
 
 func TestRendererRenderUsesGameplayAndMenuViewModels(t *testing.T) {
 	menu := buildMenuViewModel("local", "alice", 1, menuFocusName, 120, 40)
+	for _, option := range menu.ColorOptions {
+		if option.Color == ui.FoodColor {
+			t.Fatal("menu should not offer yellow food color to players")
+		}
+	}
 	menuOut := NewRenderer(nil).RenderMenu(menu)
 	for _, want := range []string{"TSNAKE", "Color 1", "alice"} {
 		if !strings.Contains(menuOut, want) {
@@ -100,7 +108,7 @@ func TestRendererRenderUsesGameplayAndMenuViewModels(t *testing.T) {
 	}
 
 	gameOut := NewRenderer(nil).Render(buildViewModel(testSnapshot(), "snake-0", 120, 40, true))
-	for _, want := range []string{"LEADERBOARD", "MINIMAP", "HOW TO PLAY"} {
+	for _, want := range []string{"LEADERBOARD", "MINIMAP", "HOW TO PLAY", "ms"} {
 		if !strings.Contains(gameOut, want) {
 			t.Fatalf("game output missing %q", want)
 		}
@@ -145,14 +153,32 @@ func TestModelMenuSpawnAndHelpDismiss(t *testing.T) {
 	}
 }
 
+func TestModelReportsPingAfterSnapshot(t *testing.T) {
+	g := game.NewGame(40, 20)
+	g.AddSnake("snake-0", "alice")
+	model := NewModel(g, "snake-0", "alice", nil, lipgloss.DefaultRenderer(), nil)
+	model.joined = true
+	model.pendingInputAt = time.Now().Add(-42 * time.Millisecond)
+
+	updated, _ := model.Update(g.Snapshot())
+	m := updated.(*Model)
+	if got := g.Snakes["snake-0"].PingMS; got < 35 {
+		t.Fatalf("ping = %dms, want >= 35ms", got)
+	}
+	if !m.pendingInputAt.IsZero() {
+		t.Fatal("expected pending input timestamp to clear after reporting ping")
+	}
+}
+
 func testSnapshot() game.GameSnapshot {
 	g := game.NewGame(60, 30)
 	g.Food = []game.FoodItem{
 		{Pos: game.Point{14, 12}, Kind: game.FoodImmortal, Color: ui.ImmortalFruitColor, Char: ui.CharImmortalFruit},
 		{Pos: game.Point{15, 12}, Kind: game.FoodMegaRed, Color: ui.MegaFruitColor, Char: ui.CharMegaFruit},
-		{Pos: game.Point{16, 12}, Kind: game.FoodRemnant, Color: lipgloss.Color("#999999"), Char: ui.CharRemnantFood},
+		{Pos: game.Point{16, 12}, Kind: game.FoodRainbow, Color: ui.RainbowFruitColor, Char: ui.CharRainbowFruit},
+		{Pos: game.Point{17, 12}, Kind: game.FoodRemnant, Color: ui.FoodColor, Char: ui.CharRemnantFood},
 	}
-	g.DeathMarkers = []game.DeathMarker{{Pos: game.Point{18, 12}, ExpiresAt: time.Now().Add(time.Second)}}
+	g.DeathMarkers = []game.DeathMarker{{Pos: game.Point{19, 12}, ExpiresAt: time.Now().Add(time.Second)}}
 	names := []string{"alice", "bravo", "charlie", "delta", "echo", "foxtrot"}
 	for i, name := range names {
 		id := "snake-" + string(rune('0'+i))
@@ -168,6 +194,7 @@ func testSnapshot() game.GameSnapshot {
 		s.NextDir = game.Right
 		s.Score = i * 10
 		s.Kills = i
+		s.PingMS = 10 + i
 		if i == len(names)-1 {
 			s.Score = 999
 		}

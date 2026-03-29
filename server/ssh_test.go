@@ -62,6 +62,7 @@ func TestSanitizePlayerName(t *testing.T) {
 
 func TestCleanupPlayerRemovesState(t *testing.T) {
 	g := game.NewGame(40, 20)
+	g.EnsureBot()
 	hub := NewHub()
 	id := "player-1"
 	g.AddSnake(id, "player-1")
@@ -74,5 +75,8 @@ func TestCleanupPlayerRemovesState(t *testing.T) {
 	}
 	if _, ok := hub.channels[id]; ok {
 		t.Fatal("expected player channel to be removed from hub")
+	}
+	if _, ok := g.Snapshot().Snakes[game.BotID]; !ok {
+		t.Fatal("expected bot to remain after player cleanup")
 	}
 }

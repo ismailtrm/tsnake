@@ -58,6 +58,7 @@ func RunSSH(cfg Config) error {
 	}
 
 	g := game.NewGame(worldWidth, worldHeight)
+	g.EnsureBot()
 	hub := NewHub()
 
 	engineCh := game.StartEngine(g, cfg.TickRate)

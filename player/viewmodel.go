@@ -48,6 +48,7 @@ type scoreboardEntry struct {
 	Name     string
 	Score    int
 	Kills    int
+	PingMS   int
 	Len      int
 	IsLeader bool
 }
@@ -275,7 +276,7 @@ func buildBoardViewModel(
 				"Move: arrows or WASD",
 				"Boost: hold or tap space",
 				"Self-bite trims your tail into food",
-				"Blue fruit: 5s immortality",
+				"Blue fruit: 10s immortality",
 				"Red fruit: +100 score and +10 growth",
 			},
 		}
@@ -291,11 +292,12 @@ func buildLeaderboardViewModel(snap game.GameSnapshot, layout layoutConfig) Lead
 			continue
 		}
 		entries = append(entries, scoreboardEntry{
-			ID:    id,
-			Name:  snake.Name,
-			Score: snake.Score,
-			Kills: snake.Kills,
-			Len:   len(snake.Body),
+			ID:     id,
+			Name:   snake.Name,
+			Score:  snake.Score,
+			Kills:  snake.Kills,
+			PingMS: snake.PingMS,
+			Len:    len(snake.Body),
 		})
 	}
 
@@ -322,7 +324,7 @@ func buildLeaderboardViewModel(snap game.GameSnapshot, layout layoutConfig) Lead
 	var key strings.Builder
 	fmt.Fprintf(&key, "%d:%d|", layout.leaderboardWidth, layout.leaderboardCount)
 	for _, entry := range entries {
-		fmt.Fprintf(&key, "%s:%s:%d:%d:%d:%v|", entry.ID, entry.Name, entry.Score, entry.Kills, entry.Len, entry.IsLeader)
+		fmt.Fprintf(&key, "%s:%s:%d:%d:%d:%d:%v|", entry.ID, entry.Name, entry.Score, entry.Kills, entry.PingMS, entry.Len, entry.IsLeader)
 	}
 
 	return LeaderboardViewModel{
@@ -377,7 +379,7 @@ func buildStatusViewModel(snap game.GameSnapshot, playerID string, layout layout
 			truncateText(snake.Name, max(8, layout.statusWidth-2)),
 			fmt.Sprintf("len:%d k:%d #:%d", len(snake.Body), snake.Kills, rank),
 			stateLine,
-			compactScoreLine(snake),
+			fmt.Sprintf("%s %dms", compactScoreLine(snake), snake.PingMS),
 		}
 		if buffLine != "" {
 			lines = append(lines, buffLine)
@@ -502,6 +504,7 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 	switch {
 	case termW >= 132 && termH >= 28:
 		sidebarWidth := clamp(termW/4, 24, 34)
+		sidebarWidth = clamp(sidebarWidth+6, 30, 42)
 		layout.mode = layoutWide
 		layout.boardNextToSidebar = true
 		layout.leaderboardWidth = sidebarWidth
@@ -513,7 +516,7 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 		layout.boardW = min(clamp(termW-sidebarWidth-6, 32, 100), worldW)
 		layout.boardH = min(clamp(termH-4, 14, 36), worldH)
 	case termW >= 96 && termH >= 24:
-		panelWidth := clamp((termW-8)/3, 20, 30)
+		panelWidth := clamp((termW-8)/3, 24, 36)
 		bottomHeight := max(8, 2+layoutMinimapHeight(termH, layoutBalanced))
 		layout.mode = layoutBalanced
 		layout.leaderboardWidth = panelWidth
@@ -533,8 +536,8 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 		layout.statusWidth = stackedWidth
 		layout.minimapPanelWidth = stackedWidth
 		if twoUp {
-			layout.leaderboardWidth = clamp(termW/2-3, 18, 28)
-			layout.statusWidth = clamp(termW-layout.leaderboardWidth-4, 18, 28)
+			layout.leaderboardWidth = clamp(termW/2-3, 22, 34)
+			layout.statusWidth = clamp(termW-layout.leaderboardWidth-4, 18, 30)
 		}
 		layout.minimapW = clamp(layout.minimapPanelWidth-4, 10, 16)
 		layout.minimapH = layoutMinimapHeight(termH, layoutCompact)

@@ -8,11 +8,12 @@ const (
 	maxFood              = 20
 	respawnDelay         = 3 * time.Second
 	boostGraceWindow     = 300 * time.Millisecond
-	immortalDuration     = 5 * time.Second
+	immortalDuration     = 10 * time.Second
 	remnantTTL           = 20 * time.Second
 	deathMarkerTTL       = 1500 * time.Millisecond
 	immortalSpawnChance  = 0.003
 	megaFruitSpawnChance = 0.002
+	rainbowSpawnChance   = 0.0007
 	maxMovePhases        = 4
 )
 
@@ -42,10 +43,13 @@ func (g *Game) Tick() {
 		return
 	}
 
+	g.planBotsLocked(now)
+
 	for _, snake := range g.Snakes {
 		if !snake.Alive || len(snake.Body) == 0 {
 			continue
 		}
+		snake.SyncScore()
 		snake.MoveBudget += snake.Speed(now)
 	}
 
@@ -67,6 +71,7 @@ func (g *Game) Tick() {
 	}
 
 	g.replenishAmbientFoodLocked()
+	g.syncScoresLocked()
 }
 
 func (g *Game) respawnSnakesLocked(now time.Time) {
@@ -89,6 +94,9 @@ func (g *Game) replenishAmbientFoodLocked() {
 	}
 	if !g.hasFoodKindLocked(FoodMegaRed) && g.rng.Float64() < megaFruitSpawnChance {
 		g.spawnSpecialFoodLocked(FoodMegaRed)
+	}
+	if !g.hasFoodKindLocked(FoodRainbow) && g.rng.Float64() < rainbowSpawnChance {
+		g.spawnSpecialFoodLocked(FoodRainbow)
 	}
 }
 
@@ -198,6 +206,7 @@ func (g *Game) resolvePhaseLocked(now time.Time) {
 
 	g.applySelfBitesLocked(now, selfBites)
 	g.consumeClaimedFoodLocked(now, foodClaims)
+	g.syncScoresLocked()
 	g.applyDeathsLocked(now, dead)
 }
 
@@ -213,6 +222,7 @@ func (g *Game) applySelfBitesLocked(now time.Time, selfBites map[string]int) {
 		if len(snake.Body) == 0 {
 			snake.Body = []Point{snake.Head()}
 		}
+		snake.SyncScore()
 		g.spawnRemnantsLocked(severed, snake.Color, now.Add(remnantTTL))
 	}
 }
@@ -236,13 +246,14 @@ func (g *Game) consumeClaimedFoodLocked(now time.Time, claims map[int]string) {
 		switch item.Kind {
 		case FoodNormal, FoodRemnant:
 			snake.Grow()
-			snake.Score += 10
 		case FoodImmortal:
 			snake.ImmortalUntil = now.Add(immortalDuration)
 		case FoodMegaRed:
-			snake.Score += 100
 			snake.GrowBy(10)
+		case FoodRainbow:
+			snake.GrowBy(20)
 		}
+		snake.SyncScore()
 		consumed[foodIdx] = struct{}{}
 	}
 
@@ -275,6 +286,130 @@ func (g *Game) applyDeathsLocked(now time.Time, dead map[string]struct{}) {
 		g.spawnRemnantsLocked(clonePoints(snake.Body), snake.Color, now.Add(remnantTTL))
 		snake.Die(now.Add(respawnDelay), g.rankLocked(id))
 	}
+}
+
+func (g *Game) syncScoresLocked() {
+	for _, snake := range g.Snakes {
+		if snake == nil {
+			continue
+		}
+		snake.SyncScore()
+	}
+}
+
+func (g *Game) planBotsLocked(now time.Time) {
+	index := g.buildOccupancyIndexLocked()
+	for id, snake := range g.Snakes {
+		if id != BotID || snake == nil || !snake.Alive || len(snake.Body) == 0 {
+			continue
+		}
+
+		bestDir := snake.Dir
+		bestScore := -1 << 30
+		boost := false
+
+		for _, dir := range []Direction{Up, Down, Left, Right} {
+			if dir == snake.Dir.Opposite() {
+				continue
+			}
+			score, safe, shouldBoost := g.scoreBotMoveLocked(now, index, snake, dir)
+			if !safe {
+				continue
+			}
+			if score > bestScore {
+				bestScore = score
+				bestDir = dir
+				boost = shouldBoost
+			}
+		}
+
+		snake.NextDir = bestDir
+		if boost {
+			snake.TouchBoost(now)
+		}
+	}
+}
+
+func (g *Game) scoreBotMoveLocked(now time.Time, index occupancyIndex, bot *Snake, dir Direction) (int, bool, bool) {
+	nextHead := wrapPoint(bot.Head().Add(dir.Delta()), g.W, g.H)
+	if !bot.IsImmortal(now) {
+		if _, blocked := index.bodyCells[nextHead]; blocked {
+			return -1 << 30, false, false
+		}
+		for id, snake := range g.Snakes {
+			if id == BotID || snake == nil || !snake.Alive || len(snake.Body) == 0 {
+				continue
+			}
+			projected := wrapPoint(snake.Head().Add(snake.Dir.Delta()), g.W, g.H)
+			if projected == nextHead {
+				return -1 << 30, false, false
+			}
+		}
+	}
+
+	score := 0
+	shouldBoost := false
+	if dir == bot.Dir {
+		score += 5
+	}
+
+	if foodIdx, ok := index.foodCells[nextHead]; ok && foodIdx >= 0 && foodIdx < len(g.Food) {
+		item := g.Food[foodIdx]
+		switch item.Kind {
+		case FoodMegaRed:
+			score += 260
+			shouldBoost = true
+		case FoodNormal, FoodRemnant:
+			score += 110
+		case FoodImmortal:
+			score += 80
+		}
+	}
+
+	bestFoodScore := -1
+	for _, item := range g.Food {
+		dist := manhattan(nextHead, item.Pos)
+		value := 0
+		switch item.Kind {
+		case FoodMegaRed:
+			value = 180
+		case FoodNormal, FoodRemnant:
+			value = 90
+		case FoodImmortal:
+			value = 70
+		}
+		value -= dist * 10
+		if value > bestFoodScore {
+			bestFoodScore = value
+			if item.Kind == FoodMegaRed && dist <= 6 {
+				shouldBoost = true
+			}
+		}
+	}
+	if bestFoodScore > 0 {
+		score += bestFoodScore
+	}
+
+	for id, snake := range g.Snakes {
+		if id == BotID || snake == nil || !snake.Alive || len(snake.Body) == 0 {
+			continue
+		}
+		dist := manhattan(nextHead, snake.Head())
+		if len(bot.Body) > len(snake.Body) {
+			score += max(0, 24-dist*3)
+			projected := wrapPoint(snake.Head().Add(snake.Dir.Delta()), g.W, g.H)
+			if manhattan(nextHead, projected) <= 1 {
+				score += 50
+				if dist <= 6 {
+					shouldBoost = true
+				}
+			}
+		} else {
+			score -= max(0, 20-dist*3)
+		}
+	}
+
+	return score, true, shouldBoost
 }
 
 func (g *Game) buildOccupancyIndexLocked() occupancyIndex {
@@ -317,6 +452,18 @@ func wrapPoint(p Point, w, h int) Point {
 		p.Y = ((p.Y % h) + h) % h
 	}
 	return p
+}
+
+func manhattan(a, b Point) int {
+	dx := a.X - b.X
+	if dx < 0 {
+		dx = -dx
+	}
+	dy := a.Y - b.Y
+	if dy < 0 {
+		dy = -dy
+	}
+	return dx + dy
 }
 
 func (g *Game) rankLocked(id string) int {

@@ -61,9 +61,11 @@ type Snake struct {
 	NextDir          Direction
 	Color            lipgloss.Color
 	Name             string
+	IsBot            bool
 	Alive            bool
 	Score            int
 	Kills            int
+	PingMS           int
 	LastScore        int
 	LastRank         int
 	RespawnAt        time.Time
@@ -86,6 +88,7 @@ func NewSnake(start Point, length int, dir Direction, color lipgloss.Color, name
 		Color:   color,
 		Name:    name,
 		Alive:   true,
+		Score:   canonicalScore(length, 0),
 	}
 }
 
@@ -114,14 +117,17 @@ func (s *Snake) Move() {
 	}
 
 	s.Body = body
+	s.Score = canonicalScore(len(s.Body), s.pendingGrowth)
 }
 
 func (s *Snake) Grow() {
 	s.pendingGrowth++
+	s.Score = canonicalScore(len(s.Body), s.pendingGrowth)
 }
 
 func (s *Snake) GrowBy(n int) {
 	s.pendingGrowth += max(0, n)
+	s.Score = canonicalScore(len(s.Body), s.pendingGrowth)
 }
 
 func (s *Snake) TouchBoost(now time.Time) {
@@ -177,6 +183,14 @@ func (s *Snake) Respawn(start Point, length int, dir Direction) {
 	s.LastBoostInputAt = time.Time{}
 	s.MoveBudget = 0
 	s.pendingGrowth = 0
+	s.Score = canonicalScore(len(s.Body), s.pendingGrowth)
+}
+
+func (s *Snake) SyncScore() {
+	if !s.Alive {
+		return
+	}
+	s.Score = canonicalScore(len(s.Body), s.pendingGrowth)
 }
 
 func Initial(name string) string {
@@ -186,4 +200,12 @@ func Initial(name string) string {
 		}
 	}
 	return "◆"
+}
+
+func canonicalScore(bodyLen, pendingGrowth int) int {
+	total := bodyLen + pendingGrowth - initialSnakeLen
+	if total < 0 {
+		return 0
+	}
+	return total * 10
 }

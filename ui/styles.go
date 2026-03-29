@@ -7,16 +7,16 @@ var PlayerColors = []lipgloss.Color{
 	"#4ECDC4",
 	"#45B7D1",
 	"#96CEB4",
-	"#FFEAA7",
 	"#DDA0DD",
-	"#F7DC6F",
 	"#82E0AA",
 }
 
 var (
 	FoodColor          = lipgloss.Color("#FFD700")
+	BotColor           = lipgloss.Color("#E63946")
 	ImmortalFruitColor = lipgloss.Color("#58A6FF")
 	MegaFruitColor     = lipgloss.Color("#FF4D6D")
+	RainbowFruitColor  = lipgloss.Color("#FF7EB6")
 	LeaderColor        = lipgloss.Color("#F2CC60")
 	RemnantTintColor   = lipgloss.Color("#6E7681")
 	BGColor            = lipgloss.Color("#0D1117")
@@ -36,6 +36,7 @@ const (
 	CharFoodAlt       = "✧"
 	CharImmortalFruit = "✺"
 	CharMegaFruit     = "✹"
+	CharRainbowFruit  = "✷"
 	CharRemnantFood   = "•"
 	CharDeathMarker   = "X"
 	CharEmpty         = " "

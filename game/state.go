@@ -7,9 +7,13 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/lucasb-eyer/go-colorful"
 
 	"github.com/ismail/tsnake/ui"
+)
+
+const (
+	BotID   = "bot-red"
+	BotName = "BOT"
 )
 
 type FoodKind string
@@ -19,6 +23,7 @@ const (
 	FoodRemnant  FoodKind = "remnant"
 	FoodImmortal FoodKind = "immortal_blue"
 	FoodMegaRed  FoodKind = "mega_red"
+	FoodRainbow  FoodKind = "rainbow_rare"
 )
 
 type FoodItem struct {
@@ -65,11 +70,13 @@ type SnakeSnap struct {
 	Color     lipgloss.Color
 	Name      string
 	Initial   string
+	IsBot     bool
 	Alive     bool
 	Boosting  bool
 	Immortal  bool
 	Score     int
 	Kills     int
+	PingMS    int
 	LastScore int
 	LastRank  int
 	RespawnIn time.Duration
@@ -133,6 +140,25 @@ func (g *Game) AddSnake(id, name string, preferredColor ...lipgloss.Color) *Snak
 	return snake
 }
 
+func (g *Game) EnsureBot() *Snake {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if bot, ok := g.Snakes[BotID]; ok {
+		bot.IsBot = true
+		bot.Name = BotName
+		bot.Color = ui.BotColor
+		bot.PingMS = 0
+		return bot
+	}
+
+	start := g.randomSpawnPointLocked(initialSnakeLen)
+	bot := NewSnake(start, initialSnakeLen, Right, ui.BotColor, BotName)
+	bot.IsBot = true
+	g.Snakes[BotID] = bot
+	return bot
+}
+
 func (g *Game) RemoveSnake(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -165,6 +191,20 @@ func (g *Game) SetBoost(id string) {
 	snake.TouchBoost(time.Now())
 }
 
+func (g *Game) SetPing(id string, pingMS int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	snake, ok := g.Snakes[id]
+	if !ok || snake.IsBot {
+		return
+	}
+	if pingMS < 0 {
+		pingMS = 0
+	}
+	snake.PingMS = pingMS
+}
+
 func (g *Game) Snapshot() GameSnapshot {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -179,11 +219,13 @@ func (g *Game) Snapshot() GameSnapshot {
 			Color:     snake.Color,
 			Name:      snake.Name,
 			Initial:   Initial(snake.Name),
+			IsBot:     snake.IsBot,
 			Alive:     snake.Alive,
 			Boosting:  snake.IsBoosting(now),
 			Immortal:  snake.IsImmortal(now),
 			Score:     snake.Score,
 			Kills:     snake.Kills,
+			PingMS:    snake.PingMS,
 			LastScore: snake.LastScore,
 			LastRank:  snake.LastRank,
 			RespawnIn: maxDuration(0, time.Until(snake.RespawnAt)),
@@ -192,10 +234,14 @@ func (g *Game) Snapshot() GameSnapshot {
 
 	food := make([]FoodSnap, 0, len(g.Food))
 	for _, item := range g.Food {
+		color := item.Color
+		if item.Kind == FoodRainbow {
+			color = rainbowColor(g.Frame)
+		}
 		food = append(food, FoodSnap{
 			Pos:   item.Pos,
 			Kind:  item.Kind,
-			Color: item.Color,
+			Color: color,
 			Char:  item.Char,
 		})
 	}
@@ -254,13 +300,16 @@ func (g *Game) spawnSpecialFoodLocked(kind FoodKind) bool {
 	case FoodMegaRed:
 		item.Color = ui.MegaFruitColor
 		item.Char = ui.CharMegaFruit
+	case FoodRainbow:
+		item.Color = ui.RainbowFruitColor
+		item.Char = ui.CharRainbowFruit
 	default:
 		return false
 	}
 	return g.spawnFoodItemLocked(item)
 }
 
-func (g *Game) spawnRemnantsLocked(segments []Point, color lipgloss.Color, expiresAt time.Time) {
+func (g *Game) spawnRemnantsLocked(segments []Point, _ lipgloss.Color, expiresAt time.Time) {
 	for _, segment := range segments {
 		if g.foodIndexAtLocked(segment) >= 0 {
 			continue
@@ -268,7 +317,7 @@ func (g *Game) spawnRemnantsLocked(segments []Point, color lipgloss.Color, expir
 		g.Food = append(g.Food, FoodItem{
 			Pos:       segment,
 			Kind:      FoodRemnant,
-			Color:     remnantColor(color),
+			Color:     ui.FoodColor,
 			Char:      ui.CharRemnantFood,
 			ExpiresAt: expiresAt,
 		})
@@ -384,20 +433,14 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-func remnantColor(base lipgloss.Color) lipgloss.Color {
-	baseColor, err := colorful.Hex(string(base))
-	if err != nil {
-		return ui.RemnantTintColor
+func rainbowColor(tick int) lipgloss.Color {
+	palette := []lipgloss.Color{
+		"#FF5E7E",
+		"#FF9F1C",
+		"#FFD166",
+		"#06D6A0",
+		"#4CC9F0",
+		"#7B61FF",
 	}
-	bgColor, err := colorful.Hex(string(ui.BGColor))
-	if err != nil {
-		return base
-	}
-	tintColor, err := colorful.Hex(string(ui.RemnantTintColor))
-	if err != nil {
-		return lipgloss.Color(baseColor.BlendRgb(bgColor, 0.55).Hex())
-	}
-
-	blended := baseColor.BlendRgb(bgColor, 0.55).BlendRgb(tintColor, 0.25)
-	return lipgloss.Color(blended.Hex())
+	return palette[(tick/2)%len(palette)]
 }

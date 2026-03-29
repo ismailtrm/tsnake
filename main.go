@@ -67,6 +67,7 @@ func main() {
 
 func runLocal(tickRate time.Duration) error {
 	g := game.NewGame(worldWidth, worldHeight)
+	g.EnsureBot()
 
 	snapCh := game.StartEngine(g, tickRate)
 	model := player.NewModel(g, localPlayerID, localPlayerName, snapCh, nil, nil)

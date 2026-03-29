@@ -54,7 +54,6 @@ func TestTickRules(t *testing.T) {
 	t.Run("self bite severs tail into remnants", func(t *testing.T) {
 		g := newRuleTestGame(20, 12)
 		s := setTestSnake(g, "a", []Point{{4, 4}, {5, 4}, {5, 5}, {4, 5}, {3, 5}, {3, 4}}, Down)
-		s.Score = 40
 
 		g.Tick()
 
@@ -64,14 +63,17 @@ func TestTickRules(t *testing.T) {
 		if got, want := len(s.Body), 4; got != want {
 			t.Fatalf("body len = %d, want %d", got, want)
 		}
-		if got := s.Score; got != 40 {
-			t.Fatalf("score = %d, want 40", got)
+		if got := s.Score; got != 0 {
+			t.Fatalf("score = %d, want 0 after severed tail", got)
 		}
 
 		remnants := 0
 		for _, item := range g.Food {
 			if item.Kind == FoodRemnant {
 				remnants++
+				if item.Color != ui.FoodColor {
+					t.Fatalf("remnant color = %s, want %s", item.Color, ui.FoodColor)
+				}
 			}
 		}
 		if remnants != 2 {
@@ -127,6 +129,9 @@ func TestTickRules(t *testing.T) {
 		if !a.IsImmortal(time.Now()) {
 			t.Fatal("snake should become immortal after blue fruit")
 		}
+		if remaining := time.Until(a.ImmortalUntil); remaining < 9*time.Second {
+			t.Fatalf("immortality duration too short: %v", remaining)
+		}
 
 		g.Tick()
 		if !a.Alive {
@@ -157,6 +162,73 @@ func TestTickRules(t *testing.T) {
 		}
 		if got := s.pendingGrowth; got != 10 {
 			t.Fatalf("pending growth = %d, want 10", got)
+		}
+	})
+
+	t.Run("rainbow fruit grants bigger growth and cycles color in snapshot", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		s := setTestSnake(g, "a", []Point{{4, 2}, {3, 2}, {2, 2}, {1, 2}}, Right)
+		g.Food = []FoodItem{{
+			Pos:   Point{5, 2},
+			Kind:  FoodRainbow,
+			Color: ui.RainbowFruitColor,
+			Char:  ui.CharRainbowFruit,
+		}}
+
+		before := g.Snapshot()
+		g.Frame = 6
+		after := g.Snapshot()
+		if before.Food[0].Color == after.Food[0].Color {
+			t.Fatal("expected rainbow fruit color to change across ticks")
+		}
+
+		g.Frame = 0
+		g.Tick()
+
+		if got := s.Score; got != 200 {
+			t.Fatalf("score = %d, want 200", got)
+		}
+		if got := s.pendingGrowth; got != 20 {
+			t.Fatalf("pending growth = %d, want 20", got)
+		}
+	})
+
+	t.Run("bot is created once and marked red", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		a := g.EnsureBot()
+		b := g.EnsureBot()
+
+		if a != b {
+			t.Fatal("expected ensure bot to return same bot instance")
+		}
+		if !a.IsBot {
+			t.Fatal("bot should be marked as bot")
+		}
+		if a.Color != ui.BotColor {
+			t.Fatalf("bot color = %s, want %s", a.Color, ui.BotColor)
+		}
+	})
+
+	t.Run("bot pursues mega fruit and can boost", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		bot := g.EnsureBot()
+		bot.Body = []Point{{4, 2}, {3, 2}, {2, 2}, {1, 2}}
+		bot.Dir = Right
+		bot.NextDir = Right
+		g.Food = []FoodItem{{
+			Pos:   Point{5, 2},
+			Kind:  FoodMegaRed,
+			Color: ui.MegaFruitColor,
+			Char:  ui.CharMegaFruit,
+		}}
+
+		g.Tick()
+
+		if got := bot.Score; got != 100 {
+			t.Fatalf("bot score = %d, want 100", got)
+		}
+		if bot.LastBoostInputAt.IsZero() {
+			t.Fatal("expected bot to trigger boost on high-value fruit pursuit")
 		}
 	})
 

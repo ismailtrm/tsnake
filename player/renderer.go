@@ -186,8 +186,8 @@ func (r *Renderer) renderLeaderboard(leaderboard LeaderboardViewModel) string {
 		return r.leaderboardView
 	}
 
-	lines := []string{leaderboard.Title, r.mutedStyle().Render("name          pts  k")}
-	nameWidth := max(4, leaderboard.Width-12)
+	lines := []string{leaderboard.Title, r.mutedStyle().Render("name            pts  k   ms")}
+	nameWidth := max(4, leaderboard.Width-20)
 	for i, entry := range leaderboard.Entries {
 		lines = append(lines, r.renderLeaderboardLine(i+1, entry, nameWidth))
 	}
@@ -202,7 +202,7 @@ func (r *Renderer) renderLeaderboard(leaderboard LeaderboardViewModel) string {
 
 func (r *Renderer) renderLeaderboardLine(rank int, entry scoreboardEntry, nameWidth int) string {
 	name := truncateText(entry.Name, nameWidth)
-	line := fmt.Sprintf("%d. %-*s %3d %2d", rank, nameWidth, name, entry.Score, entry.Kills)
+	line := fmt.Sprintf("%d. %-*s %3d %2d %4d", rank, nameWidth, name, entry.Score, entry.Kills, entry.PingMS)
 	if entry.IsLeader {
 		return r.leaderStyle().Render(line)
 	}

@@ -2,6 +2,7 @@ package player
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,6 +26,7 @@ type Model struct {
 	lastSnap    game.GameSnapshot
 	renderer    *Renderer
 	onJoin      func()
+	reportPing  bool
 
 	width    int
 	height   int
@@ -35,6 +37,8 @@ type Model struct {
 	menuName   string
 	menuFocus  menuFocus
 	colorIndex int
+
+	pendingInputAt time.Time
 }
 
 func NewModel(
@@ -56,6 +60,7 @@ func NewModel(
 		snapCh:      snapCh,
 		renderer:    NewRenderer(lipRenderer),
 		onJoin:      onJoin,
+		reportPing:  lipRenderer != nil,
 		colorIndex:  defaultColorIndex(playerID),
 	}
 }
@@ -81,6 +86,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handleGameplayKey(msg)
 	case game.GameSnapshot:
+		if m.reportPing && m.joined && !m.pendingInputAt.IsZero() {
+			m.game.SetPing(m.playerID, int(time.Since(m.pendingInputAt)/time.Millisecond))
+			m.pendingInputAt = time.Time{}
+		}
 		m.lastSnap = msg
 		m.started = true
 		return m, waitForSnapshot(m.snapCh)
@@ -157,18 +166,23 @@ func (m *Model) handleGameplayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case " ":
 		m.helpSeen = true
+		m.markInput()
 		m.game.SetBoost(m.playerID)
 	case "up", "w":
 		m.helpSeen = true
+		m.markInput()
 		m.game.SetDirection(m.playerID, game.Up)
 	case "down", "s":
 		m.helpSeen = true
+		m.markInput()
 		m.game.SetDirection(m.playerID, game.Down)
 	case "left", "a":
 		m.helpSeen = true
+		m.markInput()
 		m.game.SetDirection(m.playerID, game.Left)
 	case "right", "d":
 		m.helpSeen = true
+		m.markInput()
 		m.game.SetDirection(m.playerID, game.Right)
 	}
 	return m, nil
@@ -202,4 +216,11 @@ func defaultColorIndex(playerID string) int {
 		sum += int(r)
 	}
 	return sum % len(ui.PlayerColors)
+}
+
+func (m *Model) markInput() {
+	if !m.reportPing {
+		return
+	}
+	m.pendingInputAt = time.Now()
 }
