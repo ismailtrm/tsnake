@@ -16,6 +16,7 @@ type Model struct {
 	width    int
 	height   int
 	started  bool
+	helpSeen bool
 }
 
 func NewModel(gameState *game.Game, playerID string, snapCh <-chan game.GameSnapshot, lipRenderer *lipgloss.Renderer) *Model {
@@ -42,14 +43,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case " ":
+			m.helpSeen = true
 			m.game.SetBoost(m.playerID)
 		case "up", "w":
+			m.helpSeen = true
 			m.game.SetDirection(m.playerID, game.Up)
 		case "down", "s":
+			m.helpSeen = true
 			m.game.SetDirection(m.playerID, game.Down)
 		case "left", "a":
+			m.helpSeen = true
 			m.game.SetDirection(m.playerID, game.Left)
 		case "right", "d":
+			m.helpSeen = true
 			m.game.SetDirection(m.playerID, game.Right)
 		}
 		return m, nil
@@ -66,7 +72,7 @@ func (m *Model) View() string {
 	if !m.started {
 		return "Starting tsnake..."
 	}
-	return m.renderer.Render(m.lastSnap, m.playerID, m.width, m.height)
+	return m.renderer.Render(buildViewModel(m.lastSnap, m.playerID, m.width, m.height, !m.helpSeen))
 }
 
 func waitForSnapshot(ch <-chan game.GameSnapshot) tea.Cmd {

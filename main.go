@@ -10,21 +10,15 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
-	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/ssh"
-	"github.com/charmbracelet/wish"
-	wishbubbletea "github.com/charmbracelet/wish/bubbletea"
-	"github.com/muesli/termenv"
 
 	"github.com/ismail/tsnake/game"
 	"github.com/ismail/tsnake/player"
+	"github.com/ismail/tsnake/server"
 )
 
 const (
@@ -54,7 +48,12 @@ func main() {
 	case "local":
 		err = runLocal(*tickRate)
 	case "ssh":
-		err = runSSH(*addr, *hostKeyPath, *tickRate)
+		err = server.RunSSH(server.Config{
+			Addr:        *addr,
+			HostKeyPath: *hostKeyPath,
+			TickRate:    *tickRate,
+			Password:    os.Getenv(passwordEnvName),
+		})
 	default:
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}
@@ -88,131 +87,6 @@ func runLocal(tickRate time.Duration) error {
 
 	g.RemoveSnake(localPlayerID)
 	return nil
-}
-
-func runSSH(addr, hostKeyPath string, tickRate time.Duration) error {
-	password := os.Getenv(passwordEnvName)
-	if strings.TrimSpace(password) == "" {
-		return fmt.Errorf("%s must be set in ssh mode", passwordEnvName)
-	}
-
-	g := game.NewGame(200, 60)
-	hub := NewHub()
-
-	engineCh := game.StartEngine(g, tickRate)
-	go func() {
-		for snap := range engineCh {
-			hub.Broadcast(snap)
-		}
-	}()
-
-	if err := os.MkdirAll(filepath.Dir(hostKeyPath), 0o755); err != nil {
-		return err
-	}
-
-	srv, err := wish.NewServer(
-		wish.WithAddress(addr),
-		wish.WithIdleTimeout(10*time.Minute),
-		wish.WithHostKeyPath(hostKeyPath),
-		wish.WithPublicKeyAuth(func(_ ssh.Context, _ ssh.PublicKey) bool {
-			return false
-		}),
-		wish.WithPasswordAuth(func(_ ssh.Context, pass string) bool {
-			return pass == password
-		}),
-		wish.WithMiddleware(
-			wishbubbletea.MiddlewareWithColorProfile(playerHandler(g, hub), termenv.ANSI256),
-		),
-	)
-	if err != nil {
-		return err
-	}
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
-
-	go func() {
-		<-signals
-		_ = srv.Close()
-	}()
-
-	log.Printf("tsnake listening on %s", externalSSHAddr(addr))
-	err = srv.ListenAndServe()
-	if errors.Is(err, ssh.ErrServerClosed) {
-		return nil
-	}
-	return err
-}
-
-func playerHandler(g *game.Game, hub *Hub) wishbubbletea.Handler {
-	return func(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
-		playerID := sessionPlayerID(sess)
-		playerName := sessionPlayerName(sess)
-
-		g.AddSnake(playerID, playerName)
-		snapCh := hub.Register(playerID, g.Snapshot())
-
-		cleanup := sync.OnceFunc(func() {
-			hub.Unregister(playerID)
-			g.RemoveSnake(playerID)
-			hub.Broadcast(g.Snapshot())
-		})
-
-		go func() {
-			<-sess.Context().Done()
-			cleanup()
-		}()
-
-		hub.Broadcast(g.Snapshot())
-
-		return player.NewModel(g, playerID, snapCh, wishbubbletea.MakeRenderer(sess)), []tea.ProgramOption{tea.WithAltScreen()}
-	}
-}
-
-func sessionPlayerID(sess ssh.Session) string {
-	sessionID := sess.Context().SessionID()
-	if len(sessionID) > 12 {
-		return sessionID[:12]
-	}
-	if sessionID != "" {
-		return sessionID
-	}
-	return fmt.Sprintf("session-%d", time.Now().UnixNano())
-}
-
-func sessionPlayerName(sess ssh.Session) string {
-	name := strings.TrimSpace(sess.User())
-	if name == "" || strings.EqualFold(name, "git") {
-		return "anon-" + sessionPlayerID(sess)
-	}
-
-	var b strings.Builder
-	for _, r := range name {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
-			b.WriteRune(r)
-		}
-		if b.Len() >= 16 {
-			break
-		}
-	}
-
-	if b.Len() == 0 {
-		return "anon-" + sessionPlayerID(sess)
-	}
-
-	return b.String()
-}
-
-func externalSSHAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return fmt.Sprintf("<server-ip>:%s", port)
-	}
-	return addr
 }
 
 func startPprofServer(addr string) error {

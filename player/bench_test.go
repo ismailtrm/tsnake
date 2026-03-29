@@ -24,8 +24,9 @@ func benchmarkSnapshot() (game.GameSnapshot, string) {
 func BenchmarkRendererRender(b *testing.B) {
 	snap, playerID := benchmarkSnapshot()
 	r := NewRenderer(nil)
+	vm := buildViewModel(snap, playerID, 120, 42, false)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = r.Render(snap, playerID, 120, 42)
+		_ = r.Render(vm)
 	}
 }
