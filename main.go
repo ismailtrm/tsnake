@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,8 +41,13 @@ func main() {
 		addr        = flag.String("addr", defaultAddr, "ssh listen address")
 		hostKeyPath = flag.String("host-key-path", defaultHostKey, "ssh host key path")
 		tickRate    = flag.Duration("tick", 100*time.Millisecond, "engine tick interval")
+		pprofAddr   = flag.String("pprof-addr", "", "optional loopback-only debug address for net/http/pprof")
 	)
 	flag.Parse()
+
+	if err := startPprofServer(strings.TrimSpace(*pprofAddr)); err != nil {
+		log.Fatal(err)
+	}
 
 	var err error
 	switch strings.ToLower(strings.TrimSpace(*mode)) {
@@ -206,4 +213,40 @@ func externalSSHAddr(addr string) string {
 		return fmt.Sprintf("<server-ip>:%s", port)
 	}
 	return addr
+}
+
+func startPprofServer(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	if !isLoopbackAddr(addr) {
+		return fmt.Errorf("pprof address %q must bind to loopback only", addr)
+	}
+
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		log.Printf("pprof listening on http://%s/debug/pprof/", addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("pprof server error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	switch host {
+	case "127.0.0.1", "localhost", "::1", "[::1]":
+		return true
+	default:
+		return false
+	}
 }

@@ -20,10 +20,20 @@ type Cell struct {
 
 type Renderer struct {
 	lg        *lipgloss.Renderer
+	styles    renderStyles
+	cellCache map[cellStyleKey]lipgloss.Style
 	prev      [][]Cell
 	prevLines []string
 	width     int
 	height    int
+
+	leaderboardKey  string
+	leaderboardView string
+	statusKey       string
+	statusView      string
+	minimapKey      string
+	minimapView     string
+	minimapTick     int
 }
 
 type scoreboardEntry struct {
@@ -33,11 +43,47 @@ type scoreboardEntry struct {
 	Len   int
 }
 
+type cellStyleKey struct {
+	color string
+	bold  bool
+}
+
+type renderStyles struct {
+	app    lipgloss.Style
+	frame  lipgloss.Style
+	panel  lipgloss.Style
+	title  lipgloss.Style
+	muted  lipgloss.Style
+	danger lipgloss.Style
+	accent lipgloss.Style
+}
+
 func NewRenderer(lg *lipgloss.Renderer) *Renderer {
 	if lg == nil {
 		lg = lipgloss.DefaultRenderer()
 	}
-	return &Renderer{lg: lg}
+	r := &Renderer{
+		lg:        lg,
+		cellCache: make(map[cellStyleKey]lipgloss.Style, 32),
+	}
+	r.styles = renderStyles{
+		app: lg.NewStyle().Foreground(ui.TextColor).Background(ui.BGColor),
+		frame: lg.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ui.BorderColor).
+			Background(ui.BGColor).
+			Padding(0, 1),
+		panel: lg.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ui.BorderColor).
+			Background(ui.BGColor).
+			Padding(0, 1),
+		title:  lg.NewStyle().Foreground(ui.TextColor).Bold(true),
+		muted:  lg.NewStyle().Foreground(ui.MutedColor),
+		danger: lg.NewStyle().Foreground(ui.DangerColor).Bold(true),
+		accent: lg.NewStyle().Foreground(ui.AccentColor).Bold(true),
+	}
+	return r
 }
 
 func (r *Renderer) Render(snap game.GameSnapshot, playerID string, w, h int) string {
@@ -159,6 +205,11 @@ func (r *Renderer) renderLines(grid [][]Cell) []string {
 }
 
 func (r *Renderer) renderLeaderboard(snap game.GameSnapshot) string {
+	key := leaderboardCacheKey(snap)
+	if key == r.leaderboardKey {
+		return r.leaderboardView
+	}
+
 	entries := make([]scoreboardEntry, 0, len(snap.Snakes))
 	for id, snake := range snap.Snakes {
 		if !snake.Alive {
@@ -194,13 +245,22 @@ func (r *Renderer) renderLeaderboard(snap game.GameSnapshot) string {
 		lines = append(lines, r.mutedStyle().Render("..."))
 	}
 
-	return r.panelStyle().Width(22).Render(strings.Join(lines, "\n"))
+	r.leaderboardKey = key
+	r.leaderboardView = r.panelStyle().Width(22).Render(strings.Join(lines, "\n"))
+	return r.leaderboardView
 }
 
 func (r *Renderer) renderStatus(snap game.GameSnapshot, playerID string) string {
+	key := statusCacheKey(snap, playerID)
+	if key == r.statusKey {
+		return r.statusView
+	}
+
 	snake, ok := snap.Snakes[playerID]
 	if !ok {
-		return r.panelStyle().Width(30).Render("YOU\nDisconnected")
+		r.statusKey = key
+		r.statusView = r.panelStyle().Width(30).Render("YOU\nDisconnected")
+		return r.statusView
 	}
 
 	barTotal := 16
@@ -226,7 +286,9 @@ func (r *Renderer) renderStatus(snap game.GameSnapshot, playerID string) string 
 		scoreLine,
 	}
 
-	return r.panelStyle().Width(32).Render(strings.Join(lines, "\n"))
+	r.statusKey = key
+	r.statusView = r.panelStyle().Width(32).Render(strings.Join(lines, "\n"))
+	return r.statusView
 }
 
 func (r *Renderer) renderHeader(snap game.GameSnapshot) string {
@@ -264,6 +326,11 @@ func (r *Renderer) renderDeathScreen(snake game.SnakeSnap) string {
 }
 
 func (r *Renderer) renderMinimap(snap game.GameSnapshot, playerID string) string {
+	key := minimapCacheKey(snap, playerID)
+	if key == r.minimapKey || (snap.Tick-r.minimapTick) < 2 && r.minimapView != "" {
+		return r.minimapView
+	}
+
 	const miniW = 20
 	const miniH = 10
 
@@ -304,21 +371,20 @@ func (r *Renderer) renderMinimap(snap game.GameSnapshot, playerID string) string
 		lines[y] = line.String()
 	}
 
-	return r.panelStyle().Width(24).Render(strings.Join([]string{
+	r.minimapKey = key
+	r.minimapTick = snap.Tick
+	r.minimapView = r.panelStyle().Width(24).Render(strings.Join([]string{
 		"MINIMAP",
 		strings.Join(lines, "\n"),
 		r.mutedStyle().Render("you ◆  others •"),
 	}, "\n"))
+	return r.minimapView
 }
 
 func (r *Renderer) renderRow(row []Cell) string {
 	var line strings.Builder
 	for _, cell := range row {
-		style := r.style().Foreground(cell.Color)
-		if cell.Bold {
-			style = style.Bold(true)
-		}
-		line.WriteString(style.Render(cell.Char))
+		line.WriteString(r.cellStyle(cell.Color, cell.Bold).Render(cell.Char))
 	}
 	return line.String()
 }
@@ -357,40 +423,109 @@ func (r *Renderer) style() lipgloss.Style {
 	return r.lg.NewStyle()
 }
 
+func (r *Renderer) cellStyle(color lipgloss.Color, bold bool) lipgloss.Style {
+	key := cellStyleKey{color: string(color), bold: bold}
+	if style, ok := r.cellCache[key]; ok {
+		return style
+	}
+
+	style := r.lg.NewStyle().Foreground(color)
+	if bold {
+		style = style.Bold(true)
+	}
+	r.cellCache[key] = style
+	return style
+}
+
 func (r *Renderer) appStyle() lipgloss.Style {
-	return r.style().Foreground(ui.TextColor).Background(ui.BGColor)
+	return r.styles.app
 }
 
 func (r *Renderer) frameStyle() lipgloss.Style {
-	return r.style().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.BorderColor).
-		Background(ui.BGColor).
-		Padding(0, 1)
+	return r.styles.frame
 }
 
 func (r *Renderer) panelStyle() lipgloss.Style {
-	return r.style().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.BorderColor).
-		Background(ui.BGColor).
-		Padding(0, 1)
+	return r.styles.panel
 }
 
 func (r *Renderer) titleStyle() lipgloss.Style {
-	return r.style().Foreground(ui.TextColor).Bold(true)
+	return r.styles.title
 }
 
 func (r *Renderer) mutedStyle() lipgloss.Style {
-	return r.style().Foreground(ui.MutedColor)
+	return r.styles.muted
 }
 
 func (r *Renderer) dangerStyle() lipgloss.Style {
-	return r.style().Foreground(ui.DangerColor).Bold(true)
+	return r.styles.danger
 }
 
 func (r *Renderer) accentStyle() lipgloss.Style {
-	return r.style().Foreground(ui.AccentColor).Bold(true)
+	return r.styles.accent
+}
+
+func leaderboardCacheKey(snap game.GameSnapshot) string {
+	entries := make([]scoreboardEntry, 0, len(snap.Snakes))
+	for id, snake := range snap.Snakes {
+		if !snake.Alive {
+			continue
+		}
+		entries = append(entries, scoreboardEntry{
+			ID:    id,
+			Name:  snake.Name,
+			Score: snake.Score,
+			Len:   len(snake.Body),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Score == entries[j].Score {
+			if entries[i].Len == entries[j].Len {
+				return entries[i].Name < entries[j].Name
+			}
+			return entries[i].Len > entries[j].Len
+		}
+		return entries[i].Score > entries[j].Score
+	})
+	if len(entries) > 5 {
+		entries = entries[:5]
+	}
+	var b strings.Builder
+	for _, entry := range entries {
+		fmt.Fprintf(&b, "%s:%d:%d|", entry.ID, entry.Score, entry.Len)
+	}
+	return b.String()
+}
+
+func statusCacheKey(snap game.GameSnapshot, playerID string) string {
+	snake, ok := snap.Snakes[playerID]
+	if !ok {
+		return "missing"
+	}
+	return fmt.Sprintf("%s:%t:%t:%d:%d:%d:%d:%d:%d",
+		playerID,
+		snake.Alive,
+		snake.Boosting,
+		snake.Score,
+		snake.LastScore,
+		snake.LastRank,
+		len(snake.Body),
+		liveRank(snap, playerID),
+		snake.Dir,
+	)
+}
+
+func minimapCacheKey(snap game.GameSnapshot, playerID string) string {
+	var b strings.Builder
+	for id, snake := range snap.Snakes {
+		if len(snake.Body) == 0 {
+			continue
+		}
+		head := snake.Body[0]
+		fmt.Fprintf(&b, "%s:%d:%d|", id, head.X, head.Y)
+	}
+	b.WriteString(playerID)
+	return b.String()
 }
 
 func cloneGrid(src [][]Cell) [][]Cell {

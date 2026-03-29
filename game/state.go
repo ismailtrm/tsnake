@@ -116,8 +116,7 @@ func (g *Game) Snapshot() GameSnapshot {
 
 	snakes := make(map[string]SnakeSnap, len(g.Snakes))
 	for id, snake := range g.Snakes {
-		body := make([]Point, len(snake.Body))
-		copy(body, snake.Body)
+		body := clonePoints(snake.Body)
 		snakes[id] = SnakeSnap{
 			Body:      body,
 			Dir:       snake.Dir,
@@ -132,8 +131,7 @@ func (g *Game) Snapshot() GameSnapshot {
 		}
 	}
 
-	food := make([]Point, len(g.Food))
-	copy(food, g.Food)
+	food := clonePoints(g.Food)
 
 	return GameSnapshot{
 		Snakes:   snakes,
@@ -143,6 +141,15 @@ func (g *Game) Snapshot() GameSnapshot {
 		Tick:     g.Frame,
 		FoodChar: foodChar(g.Frame),
 	}
+}
+
+func clonePoints(src []Point) []Point {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]Point, len(src))
+	copy(dst, src)
+	return dst
 }
 
 func (g *Game) SpawnFood() {
