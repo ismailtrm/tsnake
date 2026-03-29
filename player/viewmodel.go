@@ -174,19 +174,16 @@ func buildBoardViewModel(
 		grid[y][x] = Cell{Char: snap.FoodChar, Color: ui.FoodColor, Bold: true}
 	}
 
-	for id, snake := range snap.Snakes {
+	for _, snake := range snap.Snakes {
 		for i, part := range snake.Body {
 			x := part.X - left
 			y := part.Y - top
 			if x < 0 || x >= layout.boardW || y < 0 || y >= layout.boardH {
 				continue
 			}
-			cell := Cell{
-				Char:  ui.CharSnakeBody,
-				Color: bodyColor(snake.Color, i),
-			}
+			cell := bodyCell(snake, i, snap.Tick)
 			if i == 0 {
-				cell = headCell(snake, playerID == id, snap.Tick)
+				cell = headCell(snake, snap.Tick)
 			}
 			grid[y][x] = cell
 		}
@@ -386,20 +383,29 @@ func backgroundCell(worldX, worldY int) Cell {
 	}
 }
 
-func headCell(snake game.SnakeSnap, isPlayer bool, tick int) Cell {
+func headCell(snake game.SnakeSnap, tick int) Cell {
 	color := snake.Color
 	bold := true
-	if snake.Boosting {
+	if snake.Boosting && tick%2 == 0 {
 		color = lipgloss.Color("#FFF3B0")
-	}
-	if isPlayer && tick%2 == 0 {
-		color = lipgloss.Color("#FFFFFF")
 	}
 
 	return Cell{
 		Char:  headChar(snake.Dir),
 		Color: color,
 		Bold:  bold,
+	}
+}
+
+func bodyCell(snake game.SnakeSnap, segment, tick int) Cell {
+	color := bodyColor(snake.Color, segment)
+	if snake.Boosting && tick%2 == 0 {
+		color = boostColor(color)
+	}
+
+	return Cell{
+		Char:  ui.CharSnakeBody,
+		Color: color,
 	}
 }
 
@@ -549,6 +555,19 @@ func bodyColor(base lipgloss.Color, segment int) lipgloss.Color {
 	}
 
 	return lipgloss.Color(baseColor.BlendRgb(bgColor, blend).Hex())
+}
+
+func boostColor(base lipgloss.Color) lipgloss.Color {
+	baseColor, err := colorful.Hex(string(base))
+	if err != nil {
+		return lipgloss.Color("#FFF3B0")
+	}
+	boostBase, err := colorful.Hex("#FFF3B0")
+	if err != nil {
+		return lipgloss.Color("#FFF3B0")
+	}
+
+	return lipgloss.Color(baseColor.BlendRgb(boostBase, 0.62).Hex())
 }
 
 func liveRank(snap game.GameSnapshot, playerID string) int {

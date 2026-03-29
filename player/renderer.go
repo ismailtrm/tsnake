@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/ismail/tsnake/ui"
 )
@@ -12,7 +13,7 @@ import (
 type Renderer struct {
 	lg        *lipgloss.Renderer
 	styles    renderStyles
-	cellCache map[cellStyleKey]lipgloss.Style
+	cellCache map[cellStyleKey]string
 	prev      [][]Cell
 	prevLines []string
 
@@ -28,6 +29,7 @@ type Renderer struct {
 type cellStyleKey struct {
 	color string
 	bold  bool
+	faint bool
 }
 
 type renderStyles struct {
@@ -46,7 +48,7 @@ func NewRenderer(lg *lipgloss.Renderer) *Renderer {
 	}
 	r := &Renderer{
 		lg:        lg,
-		cellCache: make(map[cellStyleKey]lipgloss.Style, 32),
+		cellCache: make(map[cellStyleKey]string, 32),
 	}
 	r.styles = renderStyles{
 		app: lg.NewStyle().Foreground(ui.TextColor).Background(ui.BGColor),
@@ -74,12 +76,8 @@ func (r *Renderer) Render(vm ViewModel) string {
 	}
 
 	header := r.renderHeader(vm.Header)
-	boardBody := strings.Join(r.renderLines(vm.Board.Grid), "\n")
+	boardBody := strings.Join(r.renderLines(vm.Board.Grid, vm.Board.Dimmed), "\n")
 	if vm.Board.Overlay != nil {
-		boardContent := boardBody
-		if vm.Board.Dimmed {
-			boardContent = r.style().Faint(true).Render(boardContent)
-		}
 		boardBody = lipgloss.Place(
 			vm.Board.Width,
 			vm.Board.Height,
@@ -87,32 +85,26 @@ func (r *Renderer) Render(vm ViewModel) string {
 			lipgloss.Center,
 			lipgloss.JoinVertical(
 				lipgloss.Center,
-				boardContent,
+				boardBody,
 				r.renderOverlay(*vm.Board.Overlay),
 			),
 		)
 	}
 
-	board := r.frameStyle().Render(boardBody)
+	board := r.renderBoardFrame(boardBody, vm.Board.Width)
 	sidebar := r.renderSidebar(vm)
 
 	if vm.Layout.boardNextToSidebar {
-		return r.appStyle().Render(
-			lipgloss.JoinVertical(
-				lipgloss.Left,
-				header,
-				lipgloss.JoinHorizontal(lipgloss.Top, board, sidebar),
-			),
+		return joinVertical(
+			header,
+			joinHorizontalTop(board, r.boardFrameWidth(vm.Board.Width), sidebar),
 		)
 	}
 
-	return r.appStyle().Render(
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			header,
-			board,
-			sidebar,
-		),
+	return joinVertical(
+		header,
+		board,
+		sidebar,
 	)
 }
 
@@ -201,7 +193,7 @@ func (r *Renderer) renderMinimap(minimap MinimapViewModel) string {
 
 	lines := make([]string, len(minimap.Grid))
 	for y, row := range minimap.Grid {
-		lines[y] = r.renderRow(row)
+		lines[y] = r.renderRow(row, false)
 	}
 
 	r.minimapKey = minimap.CacheKey
@@ -228,11 +220,18 @@ func (r *Renderer) renderOverlay(overlay OverlayViewModel) string {
 		Render(strings.Join(lines, "\n"))
 }
 
-func (r *Renderer) renderLines(grid [][]Cell) []string {
+func (r *Renderer) renderLines(grid [][]Cell, faint bool) []string {
 	lines := make([]string, len(grid))
 	if len(grid) == 0 {
 		r.prev = nil
 		r.prevLines = nil
+		return lines
+	}
+
+	if faint {
+		for y, row := range grid {
+			lines[y] = r.renderRow(row, true)
+		}
 		return lines
 	}
 
@@ -251,7 +250,7 @@ func (r *Renderer) renderLines(grid [][]Cell) []string {
 			lines[y] = r.prevLines[y]
 			continue
 		}
-		lines[y] = r.renderRow(row)
+		lines[y] = r.renderRow(row, false)
 	}
 
 	r.prev = cloneGrid(grid)
@@ -259,12 +258,63 @@ func (r *Renderer) renderLines(grid [][]Cell) []string {
 	return lines
 }
 
-func (r *Renderer) renderRow(row []Cell) string {
-	var line strings.Builder
-	for _, cell := range row {
-		line.WriteString(r.cellStyle(cell.Color, cell.Bold).Render(cell.Char))
+func (r *Renderer) renderRow(row []Cell, faint bool) string {
+	if len(row) == 0 {
+		return ""
 	}
+
+	var line strings.Builder
+	var run strings.Builder
+
+	current := cellStyleKey{color: string(row[0].Color), bold: row[0].Bold, faint: faint}
+	prefix := r.cellPrefix(current)
+	run.WriteString(row[0].Char)
+
+	flush := func() {
+		if run.Len() == 0 {
+			return
+		}
+		text := run.String()
+		run.Reset()
+		if prefix == "" {
+			line.WriteString(text)
+			return
+		}
+		line.WriteString(prefix)
+		line.WriteString(text)
+		line.WriteString(ansiReset)
+	}
+
+	for _, cell := range row[1:] {
+		next := cellStyleKey{color: string(cell.Color), bold: cell.Bold, faint: faint}
+		if next != current {
+			flush()
+			current = next
+			prefix = r.cellPrefix(current)
+		}
+		run.WriteString(cell.Char)
+	}
+	flush()
 	return line.String()
+}
+
+func (r *Renderer) renderBoardFrame(body string, width int) string {
+	borderPrefix := r.cellPrefix(cellStyleKey{color: string(ui.BorderColor)})
+	top := wrapANSI(borderPrefix, "╭"+strings.Repeat("─", width+2)+"╮")
+	bottom := wrapANSI(borderPrefix, "╰"+strings.Repeat("─", width+2)+"╯")
+
+	lines := strings.Split(body, "\n")
+	framed := make([]string, 0, len(lines)+2)
+	framed = append(framed, top)
+	for _, line := range lines {
+		framed = append(framed, wrapANSI(borderPrefix, "│")+" "+line+" "+wrapANSI(borderPrefix, "│"))
+	}
+	framed = append(framed, bottom)
+	return strings.Join(framed, "\n")
+}
+
+func (r *Renderer) boardFrameWidth(boardWidth int) int {
+	return boardWidth + 4
 }
 
 func cloneGrid(src [][]Cell) [][]Cell {
@@ -292,18 +342,31 @@ func (r *Renderer) style() lipgloss.Style {
 	return r.lg.NewStyle()
 }
 
-func (r *Renderer) cellStyle(color lipgloss.Color, bold bool) lipgloss.Style {
-	key := cellStyleKey{color: string(color), bold: bold}
-	if style, ok := r.cellCache[key]; ok {
-		return style
+func (r *Renderer) cellPrefix(key cellStyleKey) string {
+	if prefix, ok := r.cellCache[key]; ok {
+		return prefix
 	}
 
-	style := r.lg.NewStyle().Foreground(color)
-	if bold {
-		style = style.Bold(true)
+	seqs := make([]string, 0, 3)
+	if key.bold {
+		seqs = append(seqs, termenv.BoldSeq)
 	}
-	r.cellCache[key] = style
-	return style
+	if key.faint {
+		seqs = append(seqs, termenv.FaintSeq)
+	}
+	if key.color != "" {
+		if seq := r.lg.ColorProfile().Color(key.color).Sequence(false); seq != "" {
+			seqs = append(seqs, seq)
+		}
+	}
+	if len(seqs) == 0 {
+		r.cellCache[key] = ""
+		return ""
+	}
+
+	prefix := ansiCSI + strings.Join(seqs, ";") + "m"
+	r.cellCache[key] = prefix
+	return prefix
 }
 
 func (r *Renderer) appStyle() lipgloss.Style {
@@ -333,3 +396,48 @@ func (r *Renderer) dangerStyle() lipgloss.Style {
 func (r *Renderer) accentStyle() lipgloss.Style {
 	return r.styles.accent
 }
+
+func joinVertical(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func joinHorizontalTop(left string, leftWidth int, right string) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	total := max(len(leftLines), len(rightLines))
+	out := make([]string, total)
+
+	blankLeft := strings.Repeat(" ", leftWidth)
+	for i := 0; i < total; i++ {
+		l := blankLeft
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			out[i] = l + " " + rightLines[i]
+			continue
+		}
+		out[i] = l
+	}
+
+	return strings.Join(out, "\n")
+}
+
+func wrapANSI(prefix, text string) string {
+	if prefix == "" {
+		return text
+	}
+	return prefix + text + ansiReset
+}
+
+const (
+	ansiCSI   = "\x1b["
+	ansiReset = "\x1b[0m"
+)
