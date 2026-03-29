@@ -65,6 +65,7 @@ type Snake struct {
 	LastScore     int
 	LastRank      int
 	RespawnAt     time.Time
+	BoostUntil    time.Time
 	pendingGrowth int
 }
 
@@ -115,12 +116,20 @@ func (s *Snake) Grow() {
 	s.pendingGrowth++
 }
 
+func (s *Snake) Speed(now time.Time) int {
+	if s.Alive && now.Before(s.BoostUntil) {
+		return 2
+	}
+	return 1
+}
+
 func (s *Snake) Die(respawnAt time.Time, rank int) {
 	s.Alive = false
 	s.LastScore = s.Score
 	s.LastRank = rank
 	s.Score = 0
 	s.RespawnAt = respawnAt
+	s.BoostUntil = time.Time{}
 	s.Body = nil
 	s.pendingGrowth = 0
 }
@@ -134,5 +143,6 @@ func (s *Snake) Respawn(start Point, length int, dir Direction) {
 	s.NextDir = dir
 	s.Alive = true
 	s.RespawnAt = time.Time{}
+	s.BoostUntil = time.Time{}
 	s.pendingGrowth = 0
 }

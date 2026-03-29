@@ -62,7 +62,7 @@ func runLocal(tickRate time.Duration) error {
 	g.AddSnake(localPlayerID, localPlayerName)
 
 	snapCh := game.StartEngine(g, tickRate)
-	model := player.NewModel(g, localPlayerID, snapCh)
+	model := player.NewModel(g, localPlayerID, snapCh, nil)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	signals := make(chan os.Signal, 1)
@@ -159,7 +159,7 @@ func playerHandler(g *game.Game, hub *Hub) wishbubbletea.Handler {
 
 		hub.Broadcast(g.Snapshot())
 
-		return player.NewModel(g, playerID, snapCh), []tea.ProgramOption{tea.WithAltScreen()}
+		return player.NewModel(g, playerID, snapCh, wishbubbletea.MakeRenderer(sess)), []tea.ProgramOption{tea.WithAltScreen()}
 	}
 }
 

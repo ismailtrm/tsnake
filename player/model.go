@@ -2,6 +2,7 @@ package player
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ismail/tsnake/game"
 )
@@ -17,12 +18,12 @@ type Model struct {
 	started  bool
 }
 
-func NewModel(gameState *game.Game, playerID string, snapCh <-chan game.GameSnapshot) *Model {
+func NewModel(gameState *game.Game, playerID string, snapCh <-chan game.GameSnapshot, lipRenderer *lipgloss.Renderer) *Model {
 	return &Model{
 		game:     gameState,
 		playerID: playerID,
 		snapCh:   snapCh,
-		renderer: NewRenderer(),
+		renderer: NewRenderer(lipRenderer),
 	}
 }
 
@@ -40,6 +41,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case " ":
+			m.game.SetBoost(m.playerID)
 		case "up", "w":
 			m.game.SetDirection(m.playerID, game.Up)
 		case "down", "s":

@@ -19,6 +19,7 @@ type Cell struct {
 }
 
 type Renderer struct {
+	lg        *lipgloss.Renderer
 	prev      [][]Cell
 	prevLines []string
 	width     int
@@ -32,13 +33,16 @@ type scoreboardEntry struct {
 	Len   int
 }
 
-func NewRenderer() *Renderer {
-	return &Renderer{}
+func NewRenderer(lg *lipgloss.Renderer) *Renderer {
+	if lg == nil {
+		lg = lipgloss.DefaultRenderer()
+	}
+	return &Renderer{lg: lg}
 }
 
 func (r *Renderer) Render(snap game.GameSnapshot, playerID string, w, h int) string {
 	if snap.W == 0 || snap.H == 0 {
-		return ui.AppStyle.Render("Starting tsnake...")
+		return r.appStyle().Render("Starting tsnake...")
 	}
 
 	boardW, boardH := viewportSize(w, h, snap.W, snap.H)
@@ -90,7 +94,7 @@ func (r *Renderer) Render(snap game.GameSnapshot, playerID string, w, h int) str
 	r.width = boardW
 	r.height = boardH
 
-	header := renderHeader(snap)
+	header := r.renderHeader(snap)
 	boardBody := strings.Join(lines, "\n")
 	if hasPlayer && !playerSnake.Alive {
 		boardBody = lipgloss.Place(
@@ -100,20 +104,20 @@ func (r *Renderer) Render(snap game.GameSnapshot, playerID string, w, h int) str
 			lipgloss.Center,
 			lipgloss.JoinVertical(
 				lipgloss.Center,
-				lipgloss.NewStyle().Faint(true).Render(boardBody),
-				renderDeathScreen(playerSnake),
+				r.style().Faint(true).Render(boardBody),
+				r.renderDeathScreen(playerSnake),
 			),
 		)
 	}
-	board := ui.FrameStyle.Render(boardBody)
+	board := r.frameStyle().Render(boardBody)
 	sidebar := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		renderLeaderboard(snap),
-		renderStatus(snap, playerID),
-		renderMinimap(snap, playerID),
+		r.renderLeaderboard(snap),
+		r.renderStatus(snap, playerID),
+		r.renderMinimap(snap, playerID),
 	)
 
-	return ui.AppStyle.Render(
+	return r.appStyle().Render(
 		lipgloss.JoinVertical(
 			lipgloss.Left,
 			header,
@@ -146,7 +150,7 @@ func (r *Renderer) renderLines(grid [][]Cell) []string {
 			lines[y] = r.prevLines[y]
 			continue
 		}
-		lines[y] = renderRow(row)
+		lines[y] = r.renderRow(row)
 	}
 
 	r.prev = cloneGrid(grid)
@@ -154,7 +158,7 @@ func (r *Renderer) renderLines(grid [][]Cell) []string {
 	return lines
 }
 
-func renderLeaderboard(snap game.GameSnapshot) string {
+func (r *Renderer) renderLeaderboard(snap game.GameSnapshot) string {
 	entries := make([]scoreboardEntry, 0, len(snap.Snakes))
 	for id, snake := range snap.Snakes {
 		if !snake.Alive {
@@ -187,16 +191,16 @@ func renderLeaderboard(snap game.GameSnapshot) string {
 		lines = append(lines, fmt.Sprintf("%d. %-10s %3d", i+1, entry.Name, entry.Score))
 	}
 	for len(lines) < 6 {
-		lines = append(lines, ui.MutedStyle.Render("..."))
+		lines = append(lines, r.mutedStyle().Render("..."))
 	}
 
-	return ui.PanelStyle.Width(22).Render(strings.Join(lines, "\n"))
+	return r.panelStyle().Width(22).Render(strings.Join(lines, "\n"))
 }
 
-func renderStatus(snap game.GameSnapshot, playerID string) string {
+func (r *Renderer) renderStatus(snap game.GameSnapshot, playerID string) string {
 	snake, ok := snap.Snakes[playerID]
 	if !ok {
-		return ui.PanelStyle.Width(30).Render("YOU\nDisconnected")
+		return r.panelStyle().Width(30).Render("YOU\nDisconnected")
 	}
 
 	barTotal := 16
@@ -204,11 +208,13 @@ func renderStatus(snap game.GameSnapshot, playerID string) string {
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", max(0, barTotal-filled))
 	rank := liveRank(snap, playerID)
 
-	stateLine := ui.AccentStyle.Render("ALIVE")
+	stateLine := r.accentStyle().Render("ALIVE")
 	scoreLine := fmt.Sprintf("%s %d pts", bar, snake.Score)
 	if !snake.Alive {
-		stateLine = ui.DangerStyle.Render(fmt.Sprintf("RESPAWN %.1fs", snake.RespawnIn.Seconds()))
+		stateLine = r.dangerStyle().Render(fmt.Sprintf("RESPAWN %.1fs", snake.RespawnIn.Seconds()))
 		scoreLine = fmt.Sprintf("last:%d  rank:#%d", snake.LastScore, snake.LastRank)
+	} else if snake.Boosting {
+		stateLine = r.accentStyle().Render("BOOST")
 	}
 
 	lines := []string{
@@ -220,10 +226,10 @@ func renderStatus(snap game.GameSnapshot, playerID string) string {
 		scoreLine,
 	}
 
-	return ui.PanelStyle.Width(32).Render(strings.Join(lines, "\n"))
+	return r.panelStyle().Width(32).Render(strings.Join(lines, "\n"))
 }
 
-func renderHeader(snap game.GameSnapshot) string {
+func (r *Renderer) renderHeader(snap game.GameSnapshot) string {
 	alive := 0
 	for _, snake := range snap.Snakes {
 		if snake.Alive {
@@ -231,33 +237,33 @@ func renderHeader(snap game.GameSnapshot) string {
 		}
 	}
 
-	left := ui.TitleStyle.Render("TSNAKE")
-	right := ui.MutedStyle.Render(fmt.Sprintf("%d online  %d alive  %dx%d world", len(snap.Snakes), alive, snap.W, snap.H))
-	bar := lipgloss.NewStyle().
+	left := r.titleStyle().Render("TSNAKE")
+	right := r.mutedStyle().Render(fmt.Sprintf("%d online  %d alive  %dx%d world", len(snap.Snakes), alive, snap.W, snap.H))
+	bar := r.style().
 		Foreground(ui.AccentColor).
 		Render(strings.Repeat("━", max(0, 12)))
 
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, " ", bar, " ", right)
 }
 
-func renderDeathScreen(snake game.SnakeSnap) string {
+func (r *Renderer) renderDeathScreen(snake game.SnakeSnap) string {
 	respawn := fmt.Sprintf("Respawning in %.1fs", snake.RespawnIn.Seconds())
-	card := lipgloss.NewStyle().
+	card := r.style().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ui.DangerColor).
 		Padding(1, 3).
 		Background(ui.BGColor).
 		Render(strings.Join([]string{
-			ui.DangerStyle.Render("YOU DIED"),
+			r.dangerStyle().Render("YOU DIED"),
 			fmt.Sprintf("Score: %d", snake.LastScore),
 			fmt.Sprintf("Rank: #%d", snake.LastRank),
-			ui.MutedStyle.Render(respawn),
+			r.mutedStyle().Render(respawn),
 		}, "\n"))
 
 	return card
 }
 
-func renderMinimap(snap game.GameSnapshot, playerID string) string {
+func (r *Renderer) renderMinimap(snap game.GameSnapshot, playerID string) string {
 	const miniW = 20
 	const miniH = 10
 
@@ -289,7 +295,7 @@ func renderMinimap(snap game.GameSnapshot, playerID string) string {
 	for y, row := range grid {
 		var line strings.Builder
 		for _, cell := range row {
-			style := lipgloss.NewStyle().Foreground(cell.Color)
+			style := r.style().Foreground(cell.Color)
 			if cell.Bold {
 				style = style.Bold(true)
 			}
@@ -298,17 +304,17 @@ func renderMinimap(snap game.GameSnapshot, playerID string) string {
 		lines[y] = line.String()
 	}
 
-	return ui.PanelStyle.Width(24).Render(strings.Join([]string{
+	return r.panelStyle().Width(24).Render(strings.Join([]string{
 		"MINIMAP",
 		strings.Join(lines, "\n"),
-		ui.MutedStyle.Render("you ◆  others •"),
+		r.mutedStyle().Render("you ◆  others •"),
 	}, "\n"))
 }
 
-func renderRow(row []Cell) string {
+func (r *Renderer) renderRow(row []Cell) string {
 	var line strings.Builder
 	for _, cell := range row {
-		style := lipgloss.NewStyle().Foreground(cell.Color)
+		style := r.style().Foreground(cell.Color)
 		if cell.Bold {
 			style = style.Bold(true)
 		}
@@ -319,9 +325,11 @@ func renderRow(row []Cell) string {
 
 func backgroundCell(worldX, worldY, _ int) Cell {
 	switch {
-	case worldX%12 == 0 && worldY%6 == 0:
+	case worldX%8 == 0 && worldY%4 == 0:
 		return Cell{Char: "·", Color: ui.GridGlow}
-	case worldX%6 == 0 && worldY%3 == 0:
+	case worldX%4 == 0 && worldY%2 == 0:
+		return Cell{Char: "·", Color: ui.GridColor}
+	case worldX%8 == 4 && worldY%4 == 2:
 		return Cell{Char: "·", Color: ui.GridColor}
 	default:
 		return Cell{Char: ui.CharEmpty, Color: ui.TextColor}
@@ -331,6 +339,9 @@ func backgroundCell(worldX, worldY, _ int) Cell {
 func headCell(snake game.SnakeSnap, isPlayer bool, tick int) Cell {
 	color := snake.Color
 	bold := true
+	if snake.Boosting {
+		color = lipgloss.Color("#FFF3B0")
+	}
 	if isPlayer && tick%2 == 0 {
 		color = lipgloss.Color("#FFFFFF")
 	}
@@ -340,6 +351,46 @@ func headCell(snake game.SnakeSnap, isPlayer bool, tick int) Cell {
 		Color: color,
 		Bold:  bold,
 	}
+}
+
+func (r *Renderer) style() lipgloss.Style {
+	return r.lg.NewStyle()
+}
+
+func (r *Renderer) appStyle() lipgloss.Style {
+	return r.style().Foreground(ui.TextColor).Background(ui.BGColor)
+}
+
+func (r *Renderer) frameStyle() lipgloss.Style {
+	return r.style().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.BorderColor).
+		Background(ui.BGColor).
+		Padding(0, 1)
+}
+
+func (r *Renderer) panelStyle() lipgloss.Style {
+	return r.style().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.BorderColor).
+		Background(ui.BGColor).
+		Padding(0, 1)
+}
+
+func (r *Renderer) titleStyle() lipgloss.Style {
+	return r.style().Foreground(ui.TextColor).Bold(true)
+}
+
+func (r *Renderer) mutedStyle() lipgloss.Style {
+	return r.style().Foreground(ui.MutedColor)
+}
+
+func (r *Renderer) dangerStyle() lipgloss.Style {
+	return r.style().Foreground(ui.DangerColor).Bold(true)
+}
+
+func (r *Renderer) accentStyle() lipgloss.Style {
+	return r.style().Foreground(ui.AccentColor).Bold(true)
 }
 
 func cloneGrid(src [][]Cell) [][]Cell {

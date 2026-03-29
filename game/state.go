@@ -28,6 +28,7 @@ type SnakeSnap struct {
 	Color     lipgloss.Color
 	Name      string
 	Alive     bool
+	Boosting  bool
 	Score     int
 	LastScore int
 	LastRank  int
@@ -95,9 +96,23 @@ func (g *Game) SetDirection(id string, dir Direction) {
 	snake.NextDir = dir
 }
 
+func (g *Game) SetBoost(id string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	snake, ok := g.Snakes[id]
+	if !ok || !snake.Alive {
+		return
+	}
+
+	snake.BoostUntil = time.Now().Add(boostWindow)
+}
+
 func (g *Game) Snapshot() GameSnapshot {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+
+	now := time.Now()
 
 	snakes := make(map[string]SnakeSnap, len(g.Snakes))
 	for id, snake := range g.Snakes {
@@ -109,6 +124,7 @@ func (g *Game) Snapshot() GameSnapshot {
 			Color:     snake.Color,
 			Name:      snake.Name,
 			Alive:     snake.Alive,
+			Boosting:  snake.Alive && now.Before(snake.BoostUntil),
 			Score:     snake.Score,
 			LastScore: snake.LastScore,
 			LastRank:  snake.LastRank,

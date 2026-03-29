@@ -7,6 +7,7 @@ const (
 	initialFoodCount = 8
 	maxFood          = 20
 	respawnDelay     = 3 * time.Second
+	boostWindow      = 250 * time.Millisecond
 )
 
 func (g *Game) Tick() {
@@ -28,16 +29,52 @@ func (g *Game) Tick() {
 			start := g.randomSpawnPointLocked(initialSnakeLen)
 			snake.Respawn(start, initialSnakeLen, Right)
 		}
-		if snake.Alive {
-			snake.Move()
+	}
+
+	steps := 1
+	for _, snake := range g.Snakes {
+		if snake.Alive && snake.Speed(now) > steps {
+			steps = snake.Speed(now)
 		}
 	}
 
+	for step := 0; step < steps; step++ {
+		moved := false
+		for _, snake := range g.Snakes {
+			if !snake.Alive || len(snake.Body) == 0 || snake.Speed(now) <= step {
+				continue
+			}
+			snake.Move()
+			snake.Body[0] = wrapPoint(snake.Body[0], g.W, g.H)
+			moved = true
+		}
+		if !moved {
+			continue
+		}
+		dead := g.detectDeathsLocked()
+		g.consumeFoodLocked(dead)
+		for id := range dead {
+			snake := g.Snakes[id]
+			if snake == nil || !snake.Alive {
+				continue
+			}
+			g.spawnFoodFromBodyLocked(snake.Body)
+			snake.Die(now.Add(respawnDelay), g.rankLocked(id))
+		}
+	}
+
+	for len(g.Food) < initialFoodCount {
+		if !g.spawnFoodLocked() {
+			break
+		}
+	}
+}
+
+func (g *Game) detectDeathsLocked() map[string]struct{} {
 	dead := make(map[string]struct{})
 	headPositions := make(map[Point][]string)
 	for id, snake := range g.Snakes {
 		if !snake.Alive || len(snake.Body) == 0 {
-			dead[id] = struct{}{}
 			continue
 		}
 		headPositions[snake.Head()] = append(headPositions[snake.Head()], id)
@@ -53,16 +90,14 @@ func (g *Game) Tick() {
 	}
 
 	for id, snake := range g.Snakes {
+		if !snake.Alive || len(snake.Body) == 0 {
+			continue
+		}
 		if _, alreadyDead := dead[id]; alreadyDead {
 			continue
 		}
 
 		head := snake.Head()
-		if head.X < 0 || head.X >= g.W || head.Y < 0 || head.Y >= g.H {
-			dead[id] = struct{}{}
-			continue
-		}
-
 		for _, segment := range snake.Body[1:] {
 			if segment == head {
 				dead[id] = struct{}{}
@@ -74,7 +109,7 @@ func (g *Game) Tick() {
 		}
 
 		for otherID, other := range g.Snakes {
-			if otherID == id {
+			if otherID == id || !other.Alive {
 				continue
 			}
 			for _, segment := range other.Body {
@@ -89,10 +124,14 @@ func (g *Game) Tick() {
 		}
 	}
 
+	return dead
+}
+
+func (g *Game) consumeFoodLocked(dead map[string]struct{}) {
 	eatenFood := make(map[int]struct{})
 	for foodIdx, food := range g.Food {
 		for id, snake := range g.Snakes {
-			if _, isDead := dead[id]; isDead {
+			if _, isDead := dead[id]; isDead || !snake.Alive {
 				continue
 			}
 			if snake.Head() != food {
@@ -104,30 +143,46 @@ func (g *Game) Tick() {
 		}
 	}
 
-	if len(eatenFood) > 0 {
-		nextFood := make([]Point, 0, len(g.Food)-len(eatenFood))
-		for i, food := range g.Food {
-			if _, eaten := eatenFood[i]; eaten {
-				continue
-			}
-			nextFood = append(nextFood, food)
-		}
-		g.Food = nextFood
+	if len(eatenFood) == 0 {
+		return
 	}
 
-	for id := range dead {
-		snake := g.Snakes[id]
-		if snake == nil || !snake.Alive {
+	nextFood := make([]Point, 0, len(g.Food)-len(eatenFood))
+	for i, food := range g.Food {
+		if _, eaten := eatenFood[i]; eaten {
 			continue
 		}
-		snake.Die(now.Add(respawnDelay), g.rankLocked(id))
+		nextFood = append(nextFood, food)
 	}
+	g.Food = nextFood
+}
 
-	for len(g.Food) < initialFoodCount {
-		if !g.spawnFoodLocked() {
-			break
+func (g *Game) spawnFoodFromBodyLocked(body []Point) {
+	for _, segment := range body {
+		if g.hasFoodLocked(segment) {
+			continue
+		}
+		g.Food = append(g.Food, segment)
+	}
+}
+
+func (g *Game) hasFoodLocked(p Point) bool {
+	for _, food := range g.Food {
+		if food == p {
+			return true
 		}
 	}
+	return false
+}
+
+func wrapPoint(p Point, w, h int) Point {
+	if w > 0 {
+		p.X = ((p.X % w) + w) % w
+	}
+	if h > 0 {
+		p.Y = ((p.Y % h) + h) % h
+	}
+	return p
 }
 
 func (g *Game) rankLocked(id string) int {
