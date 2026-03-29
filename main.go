@@ -27,6 +27,8 @@ const (
 	defaultAddr     = ":2222"
 	defaultHostKey  = "data/host_key"
 	passwordEnvName = "TSNAKE_PASSWORD"
+	worldWidth      = 240
+	worldHeight     = 72
 )
 
 func main() {
@@ -64,11 +66,10 @@ func main() {
 }
 
 func runLocal(tickRate time.Duration) error {
-	g := game.NewGame(200, 60)
-	g.AddSnake(localPlayerID, localPlayerName)
+	g := game.NewGame(worldWidth, worldHeight)
 
 	snapCh := game.StartEngine(g, tickRate)
-	model := player.NewModel(g, localPlayerID, snapCh, nil)
+	model := player.NewModel(g, localPlayerID, localPlayerName, snapCh, nil, nil)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	signals := make(chan os.Signal, 1)

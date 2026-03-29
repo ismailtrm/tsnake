@@ -44,10 +44,12 @@ type layoutConfig struct {
 }
 
 type scoreboardEntry struct {
-	ID    string
-	Name  string
-	Score int
-	Len   int
+	ID       string
+	Name     string
+	Score    int
+	Kills    int
+	Len      int
+	IsLeader bool
 }
 
 type ViewModel struct {
@@ -57,6 +59,25 @@ type ViewModel struct {
 	Leaderboard LeaderboardViewModel
 	Status      StatusViewModel
 	Minimap     MinimapViewModel
+}
+
+type MenuViewModel struct {
+	Width         int
+	Height        int
+	Art           string
+	Name          string
+	Placeholder   string
+	NameFocused   bool
+	ColorFocused  bool
+	SelectedColor lipgloss.Color
+	ColorOptions  []MenuColorOption
+	Footer        []string
+}
+
+type MenuColorOption struct {
+	Label    string
+	Color    lipgloss.Color
+	Selected bool
 }
 
 type HeaderViewModel struct {
@@ -99,6 +120,41 @@ type MinimapViewModel struct {
 	Legend   string
 	Tick     int
 	CacheKey string
+}
+
+func buildMenuViewModel(defaultName, typedName string, colorIndex int, focus menuFocus, termW, termH int) MenuViewModel {
+	if termW <= 0 {
+		termW = 100
+	}
+	if termH <= 0 {
+		termH = 32
+	}
+
+	options := make([]MenuColorOption, 0, len(ui.PlayerColors))
+	for i, color := range ui.PlayerColors {
+		options = append(options, MenuColorOption{
+			Label:    fmt.Sprintf("Color %d", i+1),
+			Color:    color,
+			Selected: i == colorIndex,
+		})
+	}
+
+	return MenuViewModel{
+		Width:         termW,
+		Height:        termH,
+		Art:           tsnakeASCII,
+		Name:          typedName,
+		Placeholder:   defaultName,
+		NameFocused:   focus == menuFocusName,
+		ColorFocused:  focus == menuFocusColor,
+		SelectedColor: ui.PlayerColors[colorIndex%len(ui.PlayerColors)],
+		ColorOptions:  options,
+		Footer: []string{
+			"Tab / Left / Right: switch panel",
+			"Type your name, Up / Down or j / k: color",
+			"Enter: spawn  Space: boost  WASD / Arrows: move",
+		},
+	}
 }
 
 func buildViewModel(snap game.GameSnapshot, playerID string, termW, termH int, showHelp bool) ViewModel {
@@ -165,13 +221,13 @@ func buildBoardViewModel(
 		}
 	}
 
-	for _, food := range snap.Food {
-		x := food.X - left
-		y := food.Y - top
+	for _, item := range snap.Food {
+		x := item.Pos.X - left
+		y := item.Pos.Y - top
 		if x < 0 || x >= layout.boardW || y < 0 || y >= layout.boardH {
 			continue
 		}
-		grid[y][x] = Cell{Char: snap.FoodChar, Color: ui.FoodColor, Bold: true}
+		grid[y][x] = Cell{Char: item.Char, Color: item.Color, Bold: item.Kind != game.FoodRemnant}
 	}
 
 	for _, snake := range snap.Snakes {
@@ -204,6 +260,7 @@ func buildBoardViewModel(
 			BorderColor: ui.DangerColor,
 			Lines: []string{
 				fmt.Sprintf("Score: %d", playerSnake.LastScore),
+				fmt.Sprintf("Kills: %d", playerSnake.Kills),
 				fmt.Sprintf("Rank: #%d", playerSnake.LastRank),
 				fmt.Sprintf("Respawning in %.1fs", playerSnake.RespawnIn.Seconds()),
 			},
@@ -216,10 +273,10 @@ func buildBoardViewModel(
 			BorderColor: ui.AccentColor,
 			Lines: []string{
 				"Move: arrows or WASD",
-				"Sprint: tap or hold space",
-				"Edges wrap around the world",
-				"Dead snakes drop food trails",
-				"Press any move key to start",
+				"Boost: hold or tap space",
+				"Self-bite trims your tail into food",
+				"Blue fruit: 5s immortality",
+				"Red fruit: +100 score and +10 growth",
 			},
 		}
 	}
@@ -237,20 +294,27 @@ func buildLeaderboardViewModel(snap game.GameSnapshot, layout layoutConfig) Lead
 			ID:    id,
 			Name:  snake.Name,
 			Score: snake.Score,
+			Kills: snake.Kills,
 			Len:   len(snake.Body),
 		})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Score == entries[j].Score {
-			if entries[i].Len == entries[j].Len {
-				return entries[i].Name < entries[j].Name
+			if entries[i].Kills == entries[j].Kills {
+				if entries[i].Len == entries[j].Len {
+					return entries[i].Name < entries[j].Name
+				}
+				return entries[i].Len > entries[j].Len
 			}
-			return entries[i].Len > entries[j].Len
+			return entries[i].Kills > entries[j].Kills
 		}
 		return entries[i].Score > entries[j].Score
 	})
 
+	if len(entries) > 0 {
+		entries[0].IsLeader = true
+	}
 	if len(entries) > layout.leaderboardCount {
 		entries = entries[:layout.leaderboardCount]
 	}
@@ -258,12 +322,12 @@ func buildLeaderboardViewModel(snap game.GameSnapshot, layout layoutConfig) Lead
 	var key strings.Builder
 	fmt.Fprintf(&key, "%d:%d|", layout.leaderboardWidth, layout.leaderboardCount)
 	for _, entry := range entries {
-		fmt.Fprintf(&key, "%s:%s:%d:%d|", entry.ID, entry.Name, entry.Score, entry.Len)
+		fmt.Fprintf(&key, "%s:%s:%d:%d:%d:%v|", entry.ID, entry.Name, entry.Score, entry.Kills, entry.Len, entry.IsLeader)
 	}
 
 	return LeaderboardViewModel{
 		Width:        layout.leaderboardWidth,
-		Title:        fmt.Sprintf("TOP %d", layout.leaderboardCount),
+		Title:        "LEADERBOARD",
 		Entries:      entries,
 		Placeholders: layout.leaderboardCount - len(entries),
 		CacheKey:     key.String(),
@@ -275,42 +339,48 @@ func buildStatusViewModel(snap game.GameSnapshot, playerID string, layout layout
 	if !ok {
 		return StatusViewModel{
 			Width:    layout.statusWidth,
-			Lines:    []string{"YOU", "Disconnected"},
+			Lines:    []string{"YOU", "Not spawned yet"},
 			CacheKey: fmt.Sprintf("%d:missing", layout.statusWidth),
 		}
 	}
 
-	barTotal := clamp(layout.statusWidth-14, 8, 16)
-	filled := min(barTotal, snake.Score/10)
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", max(0, barTotal-filled))
 	rank := liveRank(snap, playerID)
-
 	stateLine := "ALIVE"
-	scoreLine := fmt.Sprintf("%s %d pts", bar, snake.Score)
 	if !snake.Alive {
 		stateLine = fmt.Sprintf("RESPAWN %.1fs", snake.RespawnIn.Seconds())
-		scoreLine = fmt.Sprintf("last:%d  rank:#%d", snake.LastScore, snake.LastRank)
 	} else if snake.Boosting {
 		stateLine = "BOOST"
 	}
 
-	var lines []string
+	buffLine := ""
+	if snake.Alive && snake.Immortal {
+		buffLine = "IMMORTAL"
+	}
+
+	lines := []string{
+		"YOU",
+		snake.Name,
+		fmt.Sprintf("len:%d  rank:#%d", len(snake.Body), rank),
+		fmt.Sprintf("score:%d  kills:%d", snake.Score, snake.Kills),
+		stateLine,
+	}
+	if buffLine != "" {
+		lines = append(lines, buffLine)
+	}
+	if !snake.Alive {
+		lines = append(lines, fmt.Sprintf("last:%d  rank:#%d", snake.LastScore, snake.LastRank))
+	}
+
 	if layout.mode == layoutCompact {
 		lines = []string{
 			"YOU",
 			truncateText(snake.Name, max(8, layout.statusWidth-2)),
-			fmt.Sprintf("len:%d rank:#%d %s", len(snake.Body), rank, headChar(snake.Dir)),
+			fmt.Sprintf("len:%d k:%d #:%d", len(snake.Body), snake.Kills, rank),
 			stateLine,
 			compactScoreLine(snake),
 		}
-	} else {
-		lines = []string{
-			"YOU",
-			snake.Name,
-			fmt.Sprintf("len:%d  rank:#%d", len(snake.Body), rank),
-			fmt.Sprintf("dir:%s", headChar(snake.Dir)),
-			stateLine,
-			scoreLine,
+		if buffLine != "" {
+			lines = append(lines, buffLine)
 		}
 	}
 
@@ -346,19 +416,20 @@ func buildMinimapViewModel(snap game.GameSnapshot, playerID string, layout layou
 		head := snake.Body[0]
 		x := min(layout.minimapW-1, head.X*layout.minimapW/max(1, snap.W))
 		y := min(layout.minimapH-1, head.Y*layout.minimapH/max(1, snap.H))
-		char := "•"
-		color := snake.Color
-		if id == playerID {
-			char = "◆"
-			color = ui.AccentColor
-		}
-		grid[y][x] = Cell{Char: char, Color: color, Bold: id == playerID}
-		fmt.Fprintf(&key, "%s:%d:%d|", id, head.X, head.Y)
+		grid[y][x] = Cell{Char: snake.Initial, Color: snake.Color, Bold: id == playerID}
+		fmt.Fprintf(&key, "%s:%d:%d:%s|", id, head.X, head.Y, snake.Initial)
 	}
 
-	legend := "you ◆  others •"
+	for _, death := range snap.Deaths {
+		x := min(layout.minimapW-1, death.Pos.X*layout.minimapW/max(1, snap.W))
+		y := min(layout.minimapH-1, death.Pos.Y*layout.minimapH/max(1, snap.H))
+		grid[y][x] = Cell{Char: death.Char, Color: death.Color, Bold: true}
+		fmt.Fprintf(&key, "d:%d:%d|", death.Pos.X, death.Pos.Y)
+	}
+
+	legend := "you bold  X recent death"
 	if layout.mode == layoutCompact {
-		legend = "◆ you  • all"
+		legend = "bold you  X death"
 	}
 
 	return MinimapViewModel{
@@ -372,11 +443,11 @@ func buildMinimapViewModel(snap game.GameSnapshot, playerID string, layout layou
 
 func backgroundCell(worldX, worldY int) Cell {
 	switch {
-	case worldX%8 == 0 && worldY%4 == 0:
+	case worldX%6 == 0 && worldY%3 == 0:
 		return Cell{Char: "·", Color: ui.GridGlow}
-	case worldX%4 == 0 && worldY%2 == 0:
+	case worldX%3 == 0 && worldY%2 == 0:
 		return Cell{Char: "·", Color: ui.GridColor}
-	case worldX%8 == 4 && worldY%4 == 2:
+	case worldX%6 == 3 && worldY%3 == 1:
 		return Cell{Char: "·", Color: ui.GridColor}
 	default:
 		return Cell{Char: ui.CharEmpty, Color: ui.TextColor}
@@ -385,15 +456,17 @@ func backgroundCell(worldX, worldY int) Cell {
 
 func headCell(snake game.SnakeSnap, tick int) Cell {
 	color := snake.Color
-	bold := true
 	if snake.Boosting && tick%2 == 0 {
-		color = lipgloss.Color("#FFF3B0")
+		color = boostColor(color)
+	}
+	if snake.Immortal {
+		color = lipgloss.Color("#A5D6FF")
 	}
 
 	return Cell{
-		Char:  headChar(snake.Dir),
+		Char:  snake.Initial,
 		Color: color,
-		Bold:  bold,
+		Bold:  true,
 	}
 }
 
@@ -401,6 +474,9 @@ func bodyCell(snake game.SnakeSnap, segment, tick int) Cell {
 	color := bodyColor(snake.Color, segment)
 	if snake.Boosting && tick%2 == 0 {
 		color = boostColor(color)
+	}
+	if snake.Immortal {
+		color = lipgloss.Color("#8EC5FF")
 	}
 
 	return Cell{
@@ -425,7 +501,7 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 
 	switch {
 	case termW >= 132 && termH >= 28:
-		sidebarWidth := clamp(termW/4, 24, 32)
+		sidebarWidth := clamp(termW/4, 24, 34)
 		layout.mode = layoutWide
 		layout.boardNextToSidebar = true
 		layout.leaderboardWidth = sidebarWidth
@@ -437,7 +513,7 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 		layout.boardW = min(clamp(termW-sidebarWidth-6, 32, 100), worldW)
 		layout.boardH = min(clamp(termH-4, 14, 36), worldH)
 	case termW >= 96 && termH >= 24:
-		panelWidth := clamp((termW-8)/3, 20, 28)
+		panelWidth := clamp((termW-8)/3, 20, 30)
 		bottomHeight := max(8, 2+layoutMinimapHeight(termH, layoutBalanced))
 		layout.mode = layoutBalanced
 		layout.leaderboardWidth = panelWidth
@@ -457,9 +533,8 @@ func resolveLayout(termW, termH, worldW, worldH int) layoutConfig {
 		layout.statusWidth = stackedWidth
 		layout.minimapPanelWidth = stackedWidth
 		if twoUp {
-			layout.leaderboardWidth = clamp(termW/2-3, 18, 26)
+			layout.leaderboardWidth = clamp(termW/2-3, 18, 28)
 			layout.statusWidth = clamp(termW-layout.leaderboardWidth-4, 18, 28)
-			layout.minimapPanelWidth = stackedWidth
 		}
 		layout.minimapW = clamp(layout.minimapPanelWidth-4, 10, 16)
 		layout.minimapH = layoutMinimapHeight(termH, layoutCompact)
@@ -484,7 +559,7 @@ func layoutMinimapHeight(termH int, mode layoutMode) int {
 }
 
 func compactBottomHeight(layout layoutConfig) int {
-	leaderboardHeight := layout.leaderboardCount + 3
+	leaderboardHeight := layout.leaderboardCount + 4
 	statusHeight := 7
 	minimapHeight := layout.minimapH + 4
 	if layout.compactTwoUp {
@@ -499,6 +574,9 @@ func compactScoreLine(snake game.SnakeSnap) string {
 	}
 	if snake.Boosting {
 		return fmt.Sprintf("score:%d boost", snake.Score)
+	}
+	if snake.Immortal {
+		return fmt.Sprintf("score:%d shield", snake.Score)
 	}
 	return fmt.Sprintf("score:%d", snake.Score)
 }
@@ -515,21 +593,6 @@ func truncateText(s string, maxRunes int) string {
 		return string(runes[:maxRunes])
 	}
 	return string(runes[:maxRunes-1]) + "…"
-}
-
-func headChar(dir game.Direction) string {
-	switch dir {
-	case game.Up:
-		return ui.CharHeadUp
-	case game.Down:
-		return ui.CharHeadDown
-	case game.Left:
-		return ui.CharHeadLeft
-	case game.Right:
-		return ui.CharHeadRight
-	default:
-		return ui.CharSnakeHead
-	}
 }
 
 func bodyColor(base lipgloss.Color, segment int) lipgloss.Color {
@@ -611,3 +674,12 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+const tsnakeASCII = `
+████████╗███████╗███╗   ██╗ █████╗ ██╗  ██╗███████╗
+╚══██╔══╝██╔════╝████╗  ██║██╔══██╗██║ ██╔╝██╔════╝
+   ██║   ███████╗██╔██╗ ██║███████║█████╔╝ █████╗
+   ██║   ╚════██║██║╚██╗██║██╔══██║██╔═██╗ ██╔══╝
+   ██║   ███████║██║ ╚████║██║  ██║██║  ██╗███████╗
+   ╚═╝   ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+`

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/ismail/tsnake/ui"
 )
 
 func TestTickRules(t *testing.T) {
@@ -22,22 +24,24 @@ func TestTickRules(t *testing.T) {
 		}
 	})
 
-	t.Run("boost window changes step count", func(t *testing.T) {
+	t.Run("boost move budget scales by size", func(t *testing.T) {
 		tests := []struct {
 			name     string
-			boostFor time.Duration
+			body     []Point
 			wantHead Point
 		}{
-			{name: "active", boostFor: boostWindow, wantHead: Point{X: 6, Y: 2}},
-			{name: "expired", boostFor: -time.Millisecond, wantHead: Point{X: 5, Y: 2}},
+			{name: "small snake", body: lineBody(Point{4, 2}, 6), wantHead: Point{9, 2}},
+			{name: "medium snake", body: lineBody(Point{4, 3}, 12), wantHead: Point{8, 3}},
+			{name: "large snake", body: lineBody(Point{4, 4}, 20), wantHead: Point{7, 4}},
 		}
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				g := newRuleTestGame(20, 8)
-				s := setTestSnake(g, "a", []Point{{4, 2}, {3, 2}, {2, 2}, {1, 2}}, Right)
-				s.BoostUntil = time.Now().Add(tc.boostFor)
+				g := newRuleTestGame(40, 20)
+				s := setTestSnake(g, "a", tc.body, Right)
+				s.LastBoostInputAt = time.Now()
 
+				g.Tick()
 				g.Tick()
 
 				if got := s.Head(); got != tc.wantHead {
@@ -47,7 +51,53 @@ func TestTickRules(t *testing.T) {
 		}
 	})
 
-	t.Run("head to head kills both snakes", func(t *testing.T) {
+	t.Run("self bite severs tail into remnants", func(t *testing.T) {
+		g := newRuleTestGame(20, 12)
+		s := setTestSnake(g, "a", []Point{{4, 4}, {5, 4}, {5, 5}, {4, 5}, {3, 5}, {3, 4}}, Down)
+		s.Score = 40
+
+		g.Tick()
+
+		if !s.Alive {
+			t.Fatal("snake should stay alive after self bite")
+		}
+		if got, want := len(s.Body), 4; got != want {
+			t.Fatalf("body len = %d, want %d", got, want)
+		}
+		if got := s.Score; got != 40 {
+			t.Fatalf("score = %d, want 40", got)
+		}
+
+		remnants := 0
+		for _, item := range g.Food {
+			if item.Kind == FoodRemnant {
+				remnants++
+			}
+		}
+		if remnants != 2 {
+			t.Fatalf("remnants = %d, want 2", remnants)
+		}
+	})
+
+	t.Run("body owner gets kill credit", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		a := setTestSnake(g, "a", []Point{{5, 2}, {4, 2}, {3, 2}, {2, 2}}, Right)
+		b := setTestSnake(g, "b", []Point{{4, 1}, {3, 1}, {2, 1}, {1, 1}}, Down)
+
+		g.Tick()
+
+		if !a.Alive {
+			t.Fatal("defender should stay alive")
+		}
+		if b.Alive {
+			t.Fatal("attacker should die on body collision")
+		}
+		if got := a.Kills; got != 1 {
+			t.Fatalf("kills = %d, want 1", got)
+		}
+	})
+
+	t.Run("head to head gives no kill credit", func(t *testing.T) {
 		g := newRuleTestGame(20, 8)
 		a := setTestSnake(g, "a", []Point{{5, 2}, {4, 2}, {3, 2}, {2, 2}}, Right)
 		b := setTestSnake(g, "b", []Point{{7, 2}, {8, 2}, {9, 2}, {10, 2}}, Left)
@@ -55,52 +105,104 @@ func TestTickRules(t *testing.T) {
 		g.Tick()
 
 		if a.Alive || b.Alive {
-			t.Fatalf("expected both snakes to die, got alive=%v/%v", a.Alive, b.Alive)
+			t.Fatal("expected both snakes to die")
+		}
+		if a.Kills != 0 || b.Kills != 0 {
+			t.Fatalf("kills = %d/%d, want 0/0", a.Kills, b.Kills)
 		}
 	})
 
-	t.Run("body collision kills attacker only", func(t *testing.T) {
+	t.Run("blue fruit grants immortality and protects collisions", func(t *testing.T) {
 		g := newRuleTestGame(20, 8)
 		a := setTestSnake(g, "a", []Point{{4, 2}, {3, 2}, {2, 2}, {1, 2}}, Right)
-		b := setTestSnake(g, "b", []Point{{7, 2}, {6, 2}, {5, 2}, {4, 2}}, Right)
+		b := setTestSnake(g, "b", []Point{{5, 0}, {4, 0}, {3, 0}, {2, 0}}, Down)
+		g.Food = []FoodItem{{
+			Pos:   Point{5, 2},
+			Kind:  FoodImmortal,
+			Color: ui.ImmortalFruitColor,
+			Char:  ui.CharImmortalFruit,
+		}}
 
 		g.Tick()
-
-		if a.Alive {
-			t.Fatal("attacker should die on body collision")
+		if !a.IsImmortal(time.Now()) {
+			t.Fatal("snake should become immortal after blue fruit")
 		}
-		if !b.Alive {
-			t.Fatal("defender should stay alive on body collision")
+
+		g.Tick()
+		if !a.Alive {
+			t.Fatal("immortal snake should survive lethal collision")
+		}
+		if b.Alive {
+			t.Fatal("attacker should die when hitting immortal body")
+		}
+		if got := a.Kills; got != 1 {
+			t.Fatalf("kills = %d, want 1", got)
 		}
 	})
 
-	t.Run("dead body becomes unique food trail", func(t *testing.T) {
-		g := newRuleTestGame(30, 10)
-		deadBody := []Point{
-			{4, 4}, {3, 4}, {2, 4}, {1, 4}, {0, 4},
-			{0, 5}, {1, 5}, {2, 5}, {3, 5}, {4, 5},
-		}
-		g.Food = []Point{{5, 4}}
-		a := setTestSnake(g, "a", deadBody, Right)
-		_ = setTestSnake(g, "b", []Point{{7, 4}, {6, 4}, {5, 4}, {4, 4}}, Right)
+	t.Run("red fruit grants score and growth", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		s := setTestSnake(g, "a", []Point{{4, 2}, {3, 2}, {2, 2}, {1, 2}}, Right)
+		g.Food = []FoodItem{{
+			Pos:   Point{5, 2},
+			Kind:  FoodMegaRed,
+			Color: ui.MegaFruitColor,
+			Char:  ui.CharMegaFruit,
+		}}
 
 		g.Tick()
 
-		if a.Alive {
-			t.Fatal("snake should die and drop food trail")
+		if got := s.Score; got != 100 {
+			t.Fatalf("score = %d, want 100", got)
 		}
-		if len(g.Food) != len(deadBody) {
-			t.Fatalf("food count = %d, want %d", len(g.Food), len(deadBody))
+		if got := s.pendingGrowth; got != 10 {
+			t.Fatalf("pending growth = %d, want 10", got)
+		}
+	})
+
+	t.Run("expired remnants are cleaned up", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		g.Food = []FoodItem{
+			{Pos: Point{1, 1}, Kind: FoodRemnant, Color: ui.RemnantTintColor, Char: ui.CharRemnantFood, ExpiresAt: time.Now().Add(-time.Second)},
+			{Pos: Point{2, 1}, Kind: FoodRemnant, Color: ui.RemnantTintColor, Char: ui.CharRemnantFood, ExpiresAt: time.Now().Add(time.Second)},
 		}
 
-		seen := make(map[Point]int, len(g.Food))
-		for _, food := range g.Food {
-			seen[food]++
-		}
-		for _, segment := range []Point{{5, 4}, {4, 4}, {3, 4}, {2, 4}, {1, 4}, {0, 4}, {0, 5}, {1, 5}, {2, 5}, {3, 5}} {
-			if seen[segment] != 1 {
-				t.Fatalf("food at %+v appears %d times, want 1", segment, seen[segment])
+		g.Tick()
+
+		activeRemnants := 0
+		for _, item := range g.Food {
+			if item.Kind == FoodRemnant {
+				activeRemnants++
 			}
+		}
+		if activeRemnants != 1 {
+			t.Fatalf("active remnants = %d, want 1", activeRemnants)
+		}
+		found := false
+		for _, item := range g.Food {
+			if item.Kind == FoodRemnant && item.Pos == (Point{2, 1}) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("expected fresh remnant to remain after cleanup")
+		}
+	})
+
+	t.Run("expired death markers are cleaned up", func(t *testing.T) {
+		g := newRuleTestGame(20, 8)
+		g.DeathMarkers = []DeathMarker{
+			{Pos: Point{1, 1}, ExpiresAt: time.Now().Add(-time.Second)},
+			{Pos: Point{2, 1}, ExpiresAt: time.Now().Add(time.Second)},
+		}
+
+		g.Tick()
+
+		if len(g.DeathMarkers) != 1 {
+			t.Fatalf("death markers = %d, want 1", len(g.DeathMarkers))
+		}
+		if got := g.DeathMarkers[0].Pos; got != (Point{2, 1}) {
+			t.Fatalf("remaining marker = %+v, want %+v", got, Point{2, 1})
 		}
 	})
 
@@ -117,15 +219,13 @@ func TestTickRules(t *testing.T) {
 		if len(s.Body) != initialSnakeLen {
 			t.Fatalf("respawned body len = %d, want %d", len(s.Body), initialSnakeLen)
 		}
-		if !s.RespawnAt.IsZero() {
-			t.Fatal("respawn should clear respawn time")
-		}
 	})
 }
 
 func newRuleTestGame(w, h int) *Game {
 	g := NewGame(w, h)
 	g.Food = nil
+	g.DeathMarkers = nil
 	g.Frame = 0
 	return g
 }
@@ -143,4 +243,12 @@ func setTestSnake(g *Game, id string, body []Point, dir Direction) *Snake {
 	}
 	g.Snakes[id] = s
 	return s
+}
+
+func lineBody(head Point, length int) []Point {
+	body := make([]Point, 0, length)
+	for i := 0; i < length; i++ {
+		body = append(body, Point{X: head.X - i, Y: head.Y})
+	}
+	return body
 }

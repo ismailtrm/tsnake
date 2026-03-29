@@ -40,6 +40,7 @@ type renderStyles struct {
 	muted  lipgloss.Style
 	danger lipgloss.Style
 	accent lipgloss.Style
+	leader lipgloss.Style
 }
 
 func NewRenderer(lg *lipgloss.Renderer) *Renderer {
@@ -66,8 +67,55 @@ func NewRenderer(lg *lipgloss.Renderer) *Renderer {
 		muted:  lg.NewStyle().Foreground(ui.MutedColor),
 		danger: lg.NewStyle().Foreground(ui.DangerColor).Bold(true),
 		accent: lg.NewStyle().Foreground(ui.AccentColor).Bold(true),
+		leader: lg.NewStyle().Foreground(ui.LeaderColor).Bold(true),
 	}
 	return r
+}
+
+func (r *Renderer) RenderMenu(vm MenuViewModel) string {
+	nameValue := vm.Name
+	if nameValue == "" {
+		nameValue = r.mutedStyle().Render(vm.Placeholder)
+	}
+
+	nameTitle := "Name"
+	if vm.NameFocused {
+		nameTitle = r.accentStyle().Render("Name")
+	}
+	namePanel := r.panelStyle().
+		Width(clamp(vm.Width/2-4, 24, 38)).
+		Render(strings.Join([]string{
+			nameTitle,
+			r.style().Bold(vm.NameFocused).Render(nameValue),
+			r.mutedStyle().Render("Empty uses your default handle"),
+		}, "\n"))
+
+	colorLines := []string{"Color"}
+	for _, option := range vm.ColorOptions {
+		line := r.style().Foreground(option.Color).Render("■■ ") + option.Label
+		if option.Selected {
+			line = r.accentStyle().Render("▸ ") + line
+		}
+		colorLines = append(colorLines, line)
+	}
+	if vm.ColorFocused {
+		colorLines[0] = r.accentStyle().Render("Color")
+	}
+	colorPanel := r.panelStyle().
+		Width(clamp(vm.Width/2-4, 24, 38)).
+		Render(strings.Join(colorLines, "\n"))
+
+	body := joinHorizontalTop(namePanel, clamp(vm.Width/2-4, 24, 38), colorPanel)
+	if vm.Width < 80 {
+		body = joinVertical(namePanel, colorPanel)
+	}
+
+	hero := r.style().Foreground(vm.SelectedColor).Bold(true).Render(vm.Art)
+	title := r.titleStyle().Render("TSNAKE")
+	footer := r.mutedStyle().Render(strings.Join(vm.Footer, "\n"))
+	content := joinVertical(title, hero, body, footer)
+
+	return lipgloss.Place(vm.Width, vm.Height, lipgloss.Center, lipgloss.Center, content)
 }
 
 func (r *Renderer) Render(vm ViewModel) string {
@@ -101,20 +149,13 @@ func (r *Renderer) Render(vm ViewModel) string {
 		)
 	}
 
-	return joinVertical(
-		header,
-		board,
-		sidebar,
-	)
+	return joinVertical(header, board, sidebar)
 }
 
 func (r *Renderer) renderHeader(header HeaderViewModel) string {
 	left := r.titleStyle().Render("TSNAKE")
 	right := r.mutedStyle().Render(header.RightText)
-	bar := r.style().
-		Foreground(ui.AccentColor).
-		Render(strings.Repeat("━", header.BarWidth))
-
+	bar := r.style().Foreground(ui.AccentColor).Render(strings.Repeat("━", header.BarWidth))
 	return lipgloss.JoinHorizontal(lipgloss.Center, left, " ", bar, " ", right)
 }
 
@@ -145,10 +186,10 @@ func (r *Renderer) renderLeaderboard(leaderboard LeaderboardViewModel) string {
 		return r.leaderboardView
 	}
 
-	lines := []string{leaderboard.Title}
-	nameWidth := max(4, leaderboard.Width-10)
+	lines := []string{leaderboard.Title, r.mutedStyle().Render("name          pts  k")}
+	nameWidth := max(4, leaderboard.Width-12)
 	for i, entry := range leaderboard.Entries {
-		lines = append(lines, renderLeaderboardLine(i+1, entry, nameWidth))
+		lines = append(lines, r.renderLeaderboardLine(i+1, entry, nameWidth))
 	}
 	for i := 0; i < leaderboard.Placeholders; i++ {
 		lines = append(lines, r.mutedStyle().Render("..."))
@@ -159,8 +200,13 @@ func (r *Renderer) renderLeaderboard(leaderboard LeaderboardViewModel) string {
 	return r.leaderboardView
 }
 
-func renderLeaderboardLine(rank int, entry scoreboardEntry, nameWidth int) string {
-	return fmt.Sprintf("%d. %-*s %3d", rank, nameWidth, truncateText(entry.Name, nameWidth), entry.Score)
+func (r *Renderer) renderLeaderboardLine(rank int, entry scoreboardEntry, nameWidth int) string {
+	name := truncateText(entry.Name, nameWidth)
+	line := fmt.Sprintf("%d. %-*s %3d %2d", rank, nameWidth, name, entry.Score, entry.Kills)
+	if entry.IsLeader {
+		return r.leaderStyle().Render(line)
+	}
+	return line
 }
 
 func (r *Renderer) renderStatus(status StatusViewModel) string {
@@ -172,7 +218,7 @@ func (r *Renderer) renderStatus(status StatusViewModel) string {
 	copy(lines, status.Lines)
 	for i := range lines {
 		switch lines[i] {
-		case "ALIVE", "BOOST":
+		case "ALIVE", "BOOST", "IMMORTAL":
 			lines[i] = r.accentStyle().Render(lines[i])
 		default:
 			if strings.HasPrefix(lines[i], "RESPAWN") {
@@ -198,11 +244,11 @@ func (r *Renderer) renderMinimap(minimap MinimapViewModel) string {
 
 	r.minimapKey = minimap.CacheKey
 	r.minimapTick = minimap.Tick
-	r.minimapView = r.panelStyle().Width(minimap.Width).Render(strings.Join([]string{
+	r.minimapView = r.renderPanelFrame(strings.Join([]string{
 		"MINIMAP",
 		strings.Join(lines, "\n"),
 		r.mutedStyle().Render(minimap.Legend),
-	}, "\n"))
+	}, "\n"), minimap.Width)
 	return r.minimapView
 }
 
@@ -313,6 +359,26 @@ func (r *Renderer) renderBoardFrame(body string, width int) string {
 	return strings.Join(framed, "\n")
 }
 
+func (r *Renderer) renderPanelFrame(body string, width int) string {
+	innerWidth := max(1, width-4)
+	borderPrefix := r.cellPrefix(cellStyleKey{color: string(ui.BorderColor)})
+	top := wrapANSI(borderPrefix, "╭"+strings.Repeat("─", innerWidth+2)+"╮")
+	bottom := wrapANSI(borderPrefix, "╰"+strings.Repeat("─", innerWidth+2)+"╯")
+
+	lines := strings.Split(body, "\n")
+	framed := make([]string, 0, len(lines)+2)
+	framed = append(framed, top)
+	for _, line := range lines {
+		padding := max(0, innerWidth-lipgloss.Width(line))
+		framed = append(
+			framed,
+			wrapANSI(borderPrefix, "│")+" "+line+strings.Repeat(" ", padding)+" "+wrapANSI(borderPrefix, "│"),
+		)
+	}
+	framed = append(framed, bottom)
+	return strings.Join(framed, "\n")
+}
+
 func (r *Renderer) boardFrameWidth(boardWidth int) int {
 	return boardWidth + 4
 }
@@ -373,10 +439,6 @@ func (r *Renderer) appStyle() lipgloss.Style {
 	return r.styles.app
 }
 
-func (r *Renderer) frameStyle() lipgloss.Style {
-	return r.styles.frame
-}
-
 func (r *Renderer) panelStyle() lipgloss.Style {
 	return r.styles.panel
 }
@@ -395,6 +457,10 @@ func (r *Renderer) dangerStyle() lipgloss.Style {
 
 func (r *Renderer) accentStyle() lipgloss.Style {
 	return r.styles.accent
+}
+
+func (r *Renderer) leaderStyle() lipgloss.Style {
+	return r.styles.leader
 }
 
 func joinVertical(parts ...string) string {

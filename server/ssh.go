@@ -24,6 +24,11 @@ import (
 	"github.com/ismail/tsnake/player"
 )
 
+const (
+	worldWidth  = 240
+	worldHeight = 72
+)
+
 type Config struct {
 	Addr        string
 	HostKeyPath string
@@ -52,7 +57,7 @@ func RunSSH(cfg Config) error {
 		return err
 	}
 
-	g := game.NewGame(200, 60)
+	g := game.NewGame(worldWidth, worldHeight)
 	hub := NewHub()
 
 	engineCh := game.StartEngine(g, cfg.TickRate)
@@ -106,7 +111,6 @@ func playerHandler(g *game.Game, hub *Hub) wishbubbletea.Handler {
 		playerID := sessionPlayerID(sess)
 		playerName := sessionPlayerName(sess)
 
-		g.AddSnake(playerID, playerName)
 		snapCh := hub.Register(playerID, g.Snapshot())
 
 		cleanup := sync.OnceFunc(func() {
@@ -118,9 +122,14 @@ func playerHandler(g *game.Game, hub *Hub) wishbubbletea.Handler {
 			cleanup()
 		}()
 
-		hub.Broadcast(g.Snapshot())
-
-		return player.NewModel(g, playerID, snapCh, wishbubbletea.MakeRenderer(sess)), []tea.ProgramOption{tea.WithAltScreen()}
+		return player.NewModel(
+			g,
+			playerID,
+			playerName,
+			snapCh,
+			wishbubbletea.MakeRenderer(sess),
+			func() { hub.Broadcast(g.Snapshot()) },
+		), []tea.ProgramOption{tea.WithAltScreen()}
 	}
 }
 

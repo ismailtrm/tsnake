@@ -13,7 +13,7 @@ func benchmarkGameWithSnakes(b *testing.B, snakes, food int) *Game {
 		s.Score = i * 10
 	}
 	for len(g.Food) < food {
-		g.spawnFoodLocked()
+		g.spawnNormalFoodLocked()
 	}
 	return g
 }

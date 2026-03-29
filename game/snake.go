@@ -2,6 +2,7 @@ package game
 
 import (
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -55,18 +56,21 @@ func (d Direction) Opposite() Direction {
 }
 
 type Snake struct {
-	Body          []Point
-	Dir           Direction
-	NextDir       Direction
-	Color         lipgloss.Color
-	Name          string
-	Alive         bool
-	Score         int
-	LastScore     int
-	LastRank      int
-	RespawnAt     time.Time
-	BoostUntil    time.Time
-	pendingGrowth int
+	Body             []Point
+	Dir              Direction
+	NextDir          Direction
+	Color            lipgloss.Color
+	Name             string
+	Alive            bool
+	Score            int
+	Kills            int
+	LastScore        int
+	LastRank         int
+	RespawnAt        time.Time
+	ImmortalUntil    time.Time
+	LastBoostInputAt time.Time
+	MoveBudget       float64
+	pendingGrowth    int
 }
 
 func NewSnake(start Point, length int, dir Direction, color lipgloss.Color, name string) *Snake {
@@ -116,11 +120,35 @@ func (s *Snake) Grow() {
 	s.pendingGrowth++
 }
 
-func (s *Snake) Speed(now time.Time) int {
-	if s.Alive && now.Before(s.BoostUntil) {
-		return 2
+func (s *Snake) GrowBy(n int) {
+	s.pendingGrowth += max(0, n)
+}
+
+func (s *Snake) TouchBoost(now time.Time) {
+	s.LastBoostInputAt = now
+}
+
+func (s *Snake) IsBoosting(now time.Time) bool {
+	return s.Alive && !s.LastBoostInputAt.IsZero() && now.Sub(s.LastBoostInputAt) <= boostGraceWindow
+}
+
+func (s *Snake) Speed(now time.Time) float64 {
+	if !s.IsBoosting(now) {
+		return 1.0
 	}
-	return 1
+
+	switch l := len(s.Body); {
+	case l <= 8:
+		return 2.5
+	case l <= 18:
+		return 2.0
+	default:
+		return 1.6
+	}
+}
+
+func (s *Snake) IsImmortal(now time.Time) bool {
+	return s.Alive && now.Before(s.ImmortalUntil)
 }
 
 func (s *Snake) Die(respawnAt time.Time, rank int) {
@@ -129,7 +157,9 @@ func (s *Snake) Die(respawnAt time.Time, rank int) {
 	s.LastRank = rank
 	s.Score = 0
 	s.RespawnAt = respawnAt
-	s.BoostUntil = time.Time{}
+	s.ImmortalUntil = time.Time{}
+	s.LastBoostInputAt = time.Time{}
+	s.MoveBudget = 0
 	s.Body = nil
 	s.pendingGrowth = 0
 }
@@ -143,6 +173,17 @@ func (s *Snake) Respawn(start Point, length int, dir Direction) {
 	s.NextDir = dir
 	s.Alive = true
 	s.RespawnAt = time.Time{}
-	s.BoostUntil = time.Time{}
+	s.ImmortalUntil = time.Time{}
+	s.LastBoostInputAt = time.Time{}
+	s.MoveBudget = 0
 	s.pendingGrowth = 0
+}
+
+func Initial(name string) string {
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return string(unicode.ToUpper(r))
+		}
+	}
+	return "◆"
 }

@@ -14,27 +14,35 @@ var PlayerColors = []lipgloss.Color{
 }
 
 var (
-	FoodColor   = lipgloss.Color("#FFD700")
-	BGColor     = lipgloss.Color("#0D1117")
-	BorderColor = lipgloss.Color("#30363D")
-	TextColor   = lipgloss.Color("#E6EDF3")
-	MutedColor  = lipgloss.Color("#8B949E")
-	GridColor   = lipgloss.Color("#2E353D")
-	GridGlow    = lipgloss.Color("#383F49")
-	DangerColor = lipgloss.Color("#FF7B72")
-	AccentColor = lipgloss.Color("#7EE787")
+	FoodColor          = lipgloss.Color("#FFD700")
+	ImmortalFruitColor = lipgloss.Color("#58A6FF")
+	MegaFruitColor     = lipgloss.Color("#FF4D6D")
+	LeaderColor        = lipgloss.Color("#F2CC60")
+	RemnantTintColor   = lipgloss.Color("#6E7681")
+	BGColor            = lipgloss.Color("#0D1117")
+	BorderColor        = lipgloss.Color("#30363D")
+	TextColor          = lipgloss.Color("#E6EDF3")
+	MutedColor         = lipgloss.Color("#8B949E")
+	GridColor          = lipgloss.Color("#2E353D")
+	GridGlow           = lipgloss.Color("#383F49")
+	DangerColor        = lipgloss.Color("#FF7B72")
+	AccentColor        = lipgloss.Color("#7EE787")
 )
 
 const (
-	CharSnakeHead = "◆"
-	CharSnakeBody = "●"
-	CharFood      = "✦"
-	CharFoodAlt   = "✧"
-	CharEmpty     = " "
-	CharHeadUp    = "▲"
-	CharHeadDown  = "▼"
-	CharHeadLeft  = "◀"
-	CharHeadRight = "▶"
+	CharSnakeHead     = "◆"
+	CharSnakeBody     = "●"
+	CharFood          = "✦"
+	CharFoodAlt       = "✧"
+	CharImmortalFruit = "✺"
+	CharMegaFruit     = "✹"
+	CharRemnantFood   = "•"
+	CharDeathMarker   = "X"
+	CharEmpty         = " "
+	CharHeadUp        = "▲"
+	CharHeadDown      = "▼"
+	CharHeadLeft      = "◀"
+	CharHeadRight     = "▶"
 )
 
 var (
